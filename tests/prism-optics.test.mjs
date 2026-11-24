@@ -675,7 +675,9 @@ test('all 4 optical palettes, dark/light switching, accentTone, userBubbleTint d
   styleTag = m.document.head.querySelector('style[data-agy-optics-style="1"]');
   assert.ok(styleTag.textContent.includes('JetBrains Mono'));
   assert.ok(styleTag.textContent.includes('16px'));
-  assert.ok(styleTag.textContent.includes('26px'));
+  assert.ok(styleTag.textContent.includes('min-height:26px!important;height:auto!important'));
+  assert.equal(styleTag.textContent.includes(';height:26px!important'), false);
+  assert.ok(styleTag.textContent.includes('[data-subtext]:not([data-subtext=""])'));
 
   // Fast hot update < 10ms
   const t0 = performance.now();

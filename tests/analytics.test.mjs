@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, unlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { parseChecklist } from '../lib/progress.mjs';
 import { createPricingStore, estimateCost, parseOfficialPricing, parsePartnerPricing } from '../lib/pricing.mjs';
 import { createQuotaTracker } from '../lib/quota.mjs';
-import { requestEvents } from '../lib/analytics.mjs';
+import { requestEvents, usageDashboard } from '../lib/analytics.mjs';
+import { readDatabase } from '../lib/database.mjs';
+import { fields, string as protoString } from '../lib/protobuf.mjs';
 test('buffered provider responses use whole-request timing instead of a millisecond streaming tail',()=>{
  const events=requestEvents({generations:[{requestId:'same-id',stepIndices:[8],modelName:'model',inputTokens:100,cacheReadTokens:0,outputTokens:1000,thinkingTokens:800,responseTokens:200,ttftMs:9990,streamingMs:10}],times:new Map([[8,{createdMs:1000}]])},'source');
  assert.equal(events[0].tps,100);assert.equal(events[0].durationMs,10000);assert.equal(events[0].timestampMs,1000);assert.equal(events[0].id,'same-id');
@@ -113,4 +116,155 @@ test('parsePartnerPricing dynamically parses current and future Claude models wi
   assert.equal(rates[0].input,4);assert.equal(rates[0].output,20);assert.equal(rates[0].cache,0.2);assert.equal(rates[0].cacheWrite,5);
   assert.equal(rates[1].cacheWrite,0.125);
   assert.equal(rates[2].input,6);assert.equal(rates[2].cache,0.3);assert.equal(rates[2].cacheWrite,undefined);
+});
+
+test('estimateCost prefers exact match then longest prefix and guards missing tokens or NaN rates', () => {
+  const rates = [
+    { model: 'gemini-2.5-flash', input: 0.3, output: 2.5, cache: 0.03 },
+    { model: 'gemini-2.5-flash-lite', input: 0.1, output: 0.4, cache: 0.01 },
+    { model: 'broken-rate', input: undefined, output: 1, cache: 0 }
+  ];
+  assert.ok(Math.abs(estimateCost({ model: 'Gemini 2.5 Flash Lite', inputTokens: 1e6, cacheReadTokens: 0, outputTokens: 1e6 }, rates) - 0.5) < 1e-9);
+  assert.ok(Math.abs(estimateCost({ model: 'Gemini 2.5 Flash Lite Preview', inputTokens: 1e6, cacheReadTokens: 0, outputTokens: 1e6 }, rates) - 0.5) < 1e-9);
+  assert.ok(Math.abs(estimateCost({ model: 'Gemini 2.5 Flash', inputTokens: 1e6, cacheReadTokens: 0, outputTokens: 1e6 }, rates) - 2.8) < 1e-9);
+  // Missing token fields coerce to 0 instead of returning NaN
+  const partialCost = estimateCost({ model: 'Gemini 2.5 Flash Lite', inputTokens: 1e6 }, rates);
+  assert.equal(partialCost, 0.1);
+  // Non-finite rate returns null instead of NaN
+  assert.equal(estimateCost({ model: 'broken-rate', inputTokens: 1000, outputTokens: 1000 }, rates), null);
+});
+
+test('quota tracker classifies Argon, Gemini, and Claude pools separately, skips unknown models, and bases remote-gap confidence on segDelta', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-quota-pools-'));
+  try {
+    const tracker = createQuotaTracker(dir);
+    const ts = Date.parse('2026-11-20T10:00:00Z');
+    const resetTimeMs = ts + 4 * 3600_000;
+    const rates = [
+      { model: 'gemini-4-argon', input: 2, cache: 0.1, output: 10 },
+      { model: 'gemini-4-carbon', input: 2, cache: 0.1, output: 10 },
+      { model: 'claude-opus-5-5', input: 4, cache: 0.2, output: 20 },
+      { model: 'mystery-model', input: 10, cache: 1, output: 50 }
+    ];
+    const reqs = [
+      // 3 Argon requests: $0.20 each => $0.60 total
+      { model: 'Gemini 4 Argon (High)', timestampMs: ts - 5000, durationMs: 200, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 },
+      { model: 'Orchestrator (Argon)', timestampMs: ts - 4500, durationMs: 200, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 },
+      { model: 'Gemini 4 Argon (Medium)', timestampMs: ts - 4000, durationMs: 200, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 },
+      // 3 Gemini requests: $0.40 each => $1.20 total
+      { model: 'Gemini 4 Carbon (High)', timestampMs: ts - 3500, durationMs: 200, inputTokens: 200000, cacheReadTokens: 0, outputTokens: 0 },
+      { model: 'Gemini 4 Carbon (High)', timestampMs: ts - 3000, durationMs: 200, inputTokens: 200000, cacheReadTokens: 0, outputTokens: 0 },
+      { model: 'Orchestrator (Carbon)', timestampMs: ts - 2500, durationMs: 200, inputTokens: 200000, cacheReadTokens: 0, outputTokens: 0 },
+      // 3 Claude requests: $0.40 each => $1.20 total
+      { model: 'Claude Opus 5.5', timestampMs: ts - 2000, durationMs: 200, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 },
+      { model: 'Claude Opus 5.5', timestampMs: ts - 1500, durationMs: 200, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 },
+      { model: 'Claude Opus 5.5', timestampMs: ts - 1000, durationMs: 200, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 },
+      // Unknown model should be skipped, NOT dumped into Claude or Argon
+      { model: 'mystery-model', timestampMs: ts - 500, durationMs: 200, inputTokens: 1000000, cacheReadTokens: 0, outputTokens: 0 }
+    ];
+    const groups = [
+      { displayName: 'Gemini 4 Argon', buckets: [{ bucketId: 'gemini-argon-wtu-weekly', window: 'weekly', remainingFraction: 0.98, resetTimeMs }] },
+      { displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.96, resetTimeMs }] },
+      { displayName: 'Claude and GPT models', buckets: [{ bucketId: '3p-5h', window: '5h', remainingFraction: 0.97, resetTimeMs }] }
+    ];
+    const est = tracker.observe(groups, reqs, rates, ts).estimates;
+    assert.equal(est[0].observedRequests, 3);
+    assert.ok(Math.abs(est[0].estimateUsd - 30) < 1e-9); // $0.60 / 0.02
+    assert.equal(est[1].observedRequests, 3);
+    assert.ok(Math.abs(est[1].estimateUsd - 30) < 1e-9); // $1.20 / 0.04
+    assert.equal(est[2].observedRequests, 3);
+    assert.ok(Math.abs(est[2].estimateUsd - 40) < 1e-9); // $1.20 / 0.03
+
+    // Remote gap confidence uses segDelta (0.02 < 0.05 -> low), not total delta (0.22 >= 0.05)
+    const gapReset = ts + 6 * 86400_000;
+    tracker.observe([{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.80, resetTimeMs: gapReset }] }], [], rates, ts + 1000);
+    const localReqs = Array.from({ length: 8 }, (_, i) => ({
+      model: 'Gemini 4 Carbon (High)',
+      timestampMs: ts + 2000 + i * 1000,
+      durationMs: 100,
+      inputTokens: 100000,
+      cacheReadTokens: 0,
+      outputTokens: 0
+    }));
+    const gapLow = tracker.observe([{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.78, resetTimeMs: gapReset }] }], localReqs, rates, ts + 20000).estimates[0];
+    assert.equal(gapLow.observedRequests, 8);
+    assert.equal(gapLow.confidence, 'low');
+    const moreLocalReqs = [
+      ...localReqs,
+      { model: 'Gemini 4 Carbon (High)', timestampMs: ts + 25000, durationMs: 100, inputTokens: 100000, cacheReadTokens: 0, outputTokens: 0 }
+    ];
+    const gapMedium = tracker.observe([{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.74, resetTimeMs: gapReset }] }], moreLocalReqs, rates, ts + 30000).estimates[0];
+    assert.equal(gapMedium.confidence, 'medium');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('usageDashboard caches >12 SQLite DBs incrementally even with force:true, prunes deleted DBs, and protobuf avoids copying Buffers', () => {
+  const varint = value => { const a = []; let n = BigInt(value); do { let b = Number(n & 127n); n >>= 7n; if (n) b |= 128; a.push(b); } while (n); return Buffer.from(a); };
+  const integer = (n, value) => Buffer.concat([varint(n * 8), varint(value)]);
+  const bytes = (n, value) => { const b = Buffer.from(value); return Buffer.concat([varint(n * 8 + 2), varint(b.length), b]); };
+  const makeGen = (reqId, modelName, outTokens) => Buffer.concat([
+    bytes(1, Buffer.concat([
+      bytes(4, Buffer.concat([integer(2, 100), integer(3, outTokens)])),
+      bytes(19, modelName),
+      bytes(20, Buffer.concat([bytes(1, 'request_id'), bytes(2, reqId)]))
+    ])),
+    integer(2, 1)
+  ]);
+
+  // Protobuf zero-copy subarray when input is already a Buffer
+  const rawBuf = makeGen('req-buf', 'Gemini 4 Neon', 42);
+  const parsedMap = fields(rawBuf);
+  assert.equal(parsedMap.get(1)[0].buffer, rawBuf.buffer);
+  assert.equal(protoString(fields(parsedMap.get(1)[0]), 19), 'Gemini 4 Neon');
+
+  const root = mkdtempSync(join(tmpdir(), 'agy-db-cache-'));
+  try {
+    const convDir = join(root, 'conversations');
+    mkdirSync(convDir, { recursive: true });
+    const writeConvDb = (id, reqId, outTokens, tsSec) => {
+      const dbPath = join(convDir, `${id}.db`);
+      const db = new DatabaseSync(dbPath);
+      db.exec('CREATE TABLE IF NOT EXISTS gen_metadata(idx INTEGER PRIMARY KEY,data BLOB); CREATE TABLE IF NOT EXISTS steps(idx INTEGER PRIMARY KEY,metadata BLOB);');
+      db.prepare('INSERT OR REPLACE INTO gen_metadata VALUES (?,?)').run(0, makeGen(reqId, 'Gemini 4 Neon', outTokens));
+      db.prepare('INSERT OR REPLACE INTO steps VALUES (?,?)').run(1, bytes(1, integer(1, tsSec)));
+      db.close();
+      return dbPath;
+    };
+
+    // Create 16 conversation DBs (exceeding the legacy 12-entry FIFO cap)
+    const paths = [];
+    for (let i = 0; i < 16; i++) {
+      paths.push(writeConvDb(`conv-${i}`, `req-${i}`, 100 + i, 1735689600 + i * 10));
+    }
+    const first = usageDashboard(root, { force: true });
+    assert.equal(first.totalRequests, 16);
+    // LRU cache holds all 16 DBs without eviction
+    const db0First = readDatabase(root, 'conv-0');
+    const db0Second = readDatabase(root, 'conv-0');
+    assert.equal(db0First, db0Second);
+
+    // Repeat with force:true — unchanged DBs reuse cached requestEvents objects
+    const second = usageDashboard(root, { force: true });
+    assert.equal(second.totalRequests, 16);
+    assert.equal(second.requests.find(r => r.id === 'req-0'), first.requests.find(r => r.id === 'req-0'));
+
+    // Modify one DB and bump mtime so stamp changes
+    writeConvDb('conv-5', 'req-5-updated', 999, 1735699999);
+    const future = new Date(Date.now() + 5000);
+    utimesSync(paths[5], future, future);
+    const third = usageDashboard(root, { force: true });
+    assert.equal(third.totalRequests, 16);
+    assert.ok(third.requests.some(r => r.id === 'req-5-updated' && r.outputTokens === 999));
+    assert.equal(third.requests.find(r => r.id === 'req-0'), first.requests.find(r => r.id === 'req-0'));
+
+    // Delete a DB file — incremental cache prunes its events
+    unlinkSync(paths[0]);
+    const fourth = usageDashboard(root, { force: true });
+    assert.equal(fourth.totalRequests, 15);
+    assert.equal(fourth.requests.some(r => r.id === 'req-0'), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

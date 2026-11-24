@@ -200,3 +200,70 @@ test('parseSessionData updates context tokens and percentage immediately after /
   }
 });
 
+test('parseSessionData reads max-telemetry.jsonl, gates interrupted tool resultTiming to GENERIC within turn, and deduplicates errorCount', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-session-fix-'));
+  const previous = process.env.ANTIGRAVITY_APP_DATA_DIR;
+  process.env.ANTIGRAVITY_APP_DATA_DIR = root;
+  try {
+    const logs = join(root, 'brain', 'sess-fix', '.system_generated', 'logs');
+    mkdirSync(logs, { recursive: true });
+    mkdirSync(join(root, 'conversations'), { recursive: true });
+
+    writeFileSync(join(logs, 'max-telemetry.jsonl'), [
+      JSON.stringify({ pluginId: 'agy-max', event: 'PreInvocation', ts: 1735689600000 }),
+      JSON.stringify({ pluginId: 'agy-max', event: 'PostInvocation', ts: 1735689605000 })
+    ].join('\n') + '\n');
+
+    const steps = [
+      { step_index: 0, type: 'USER_INPUT', created_at: '2025-01-01T00:00:00Z', content: '<USER_REQUEST>turn 1</USER_REQUEST>' },
+      {
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2025-01-01T00:00:01Z',
+        content: 'running interrupted tools',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'sleep 99' } },
+          { name: 'read_file', args: { Path: 'a.txt' } }
+        ]
+      },
+      // Interrupted: NO GENERIC result for turn 1's tools; next step is USER_INPUT for turn 2!
+      { step_index: 2, type: 'USER_INPUT', created_at: '2025-01-01T00:01:00Z', content: '<USER_REQUEST>turn 2</USER_REQUEST>' },
+      { step_index: 3, type: 'GENERIC', created_at: '2025-01-01T00:01:05Z', content: 'Created At: 2025-01-01T00:01:05Z\nCompleted At: 2025-01-01T00:01:10Z\nunrelated later generic' },
+      { step_index: 4, type: 'ERROR_MESSAGE', created_at: '2025-01-01T00:01:12Z', content: 'upstream timeout' }
+    ];
+    writeFileSync(join(logs, 'transcript.jsonl'), steps.map(s => JSON.stringify(s)).join('\n') + '\n');
+
+    const dbPath = join(root, 'conversations', 'sess-fix.db');
+    const db = new DatabaseSync(dbPath);
+    db.exec('CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB); CREATE TABLE steps(idx INTEGER PRIMARY KEY,metadata BLOB);');
+    // Failed generation matching step 4 ('upstream timeout') + a distinct separate failed generation at step 10
+    const failedGen1 = concat(bytes(1, bytes(19, 'Gemini 4 Neon')), integer(2, 4), bytes(5, 'upstream timeout'));
+    const failedGen2 = concat(bytes(1, bytes(19, 'Gemini 4 Neon')), integer(2, 10), bytes(5, 'rate limited'));
+    db.prepare('INSERT INTO gen_metadata VALUES (?,?)').run(0, failedGen1);
+    db.prepare('INSERT INTO gen_metadata VALUES (?,?)').run(1, failedGen2);
+    // Give step 1 completed at +5s, step 2 (USER_INPUT) started/completed at +60s/+70s, step 3 (GENERIC) at +65s/+70s, step 4 at +72s, step 10 at +200s
+    db.prepare('INSERT INTO steps VALUES (?,?)').run(1, concat(bytes(1, timestamp(1735689601)), bytes(8, timestamp(1735689605))));
+    db.prepare('INSERT INTO steps VALUES (?,?)').run(2, concat(bytes(1, timestamp(1735689660)), bytes(32, timestamp(1735689660)), bytes(8, timestamp(1735689670))));
+    db.prepare('INSERT INTO steps VALUES (?,?)').run(3, concat(bytes(1, timestamp(1735689665)), bytes(32, timestamp(1735689665)), bytes(8, timestamp(1735689670))));
+    db.prepare('INSERT INTO steps VALUES (?,?)').run(4, concat(bytes(1, timestamp(1735689672))));
+    db.prepare('INSERT INTO steps VALUES (?,?)').run(10, concat(bytes(1, timestamp(1735689800))));
+    db.close();
+
+    const state = parseSessionData('sess-fix', { includeSessions: false });
+    assert.equal(state.hookEventsCount, 2);
+    // Turn 1's interrupted tool calls must NOT borrow turn 2's USER_INPUT or later GENERIC timing
+    assert.equal(state.turns[0].toolCalls.length, 2);
+    assert.equal(state.turns[0].toolCalls[0].durationMs, null);
+    assert.equal(state.turns[0].toolCalls[1].durationMs, null);
+    assert.equal(state.turns[0].completedAtMs, 1735689605000);
+    assert.equal(state.telemetry.toolTimeMs, null);
+    // 1 ERROR_MESSAGE + 2 failed requests where 1 matches ERROR_MESSAGE => deduplicated errorCount = 2 (not 3)
+    assert.equal(state.errors.length, 1);
+    assert.equal(state.telemetry.errorCount, 2);
+  } finally {
+    if (previous === undefined) delete process.env.ANTIGRAVITY_APP_DATA_DIR;
+    else process.env.ANTIGRAVITY_APP_DATA_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
