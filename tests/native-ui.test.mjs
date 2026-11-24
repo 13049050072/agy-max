@@ -41,8 +41,8 @@ test('SSH command paste observes setting changes without reinstalling its listen
   p.context.__agyPanels = env => { change = env.change; };
   p.context.installSshCommandPaste = (_document, options) => { enabled = options.enabled; installs++; };
   p.context.__agyPowertoolsHost = raw => {
-    const { id, method, settings: patch } = JSON.parse(raw);
-    if (method === 'settings.set') Object.assign(settings, patch);
+    const { id, method, payload } = JSON.parse(raw);
+    if (method === 'settings.set') Object.assign(settings, payload.settings);
     queueMicrotask(() => p.context.__agyPowertoolsReceive?.(id, { ...settings }));
   };
   vm.runInContext(source, p.context);
@@ -141,8 +141,8 @@ test('side-question and split-pane composers fetch and render independent contex
       return;
     }
     if (req.method === 'state') {
-      stateRequests.push(req.conversationId);
-      const reply = req.conversationId === 'btw-conv'
+      stateRequests.push(req.payload.conversationId);
+      const reply = req.payload.conversationId === 'btw-conv'
         ? { conversationId: 'btw-conv', contextWindow: { usedPercent: 80.4, usedTokens: 632000, maxTokens: 786432, categories: [] }, telemetry: { tps: 38, latestTps: 60.4 }, turns: [], requests: [] }
         : { conversationId: 'main-conv', contextWindow: { usedPercent: 78.2, usedTokens: 615000, maxTokens: 786432, categories: [] }, telemetry: { tps: 38, latestTps: 51.7 }, turns: [], requests: [] };
       queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, reply));
@@ -365,7 +365,7 @@ test('cold-start proxy prompt banner appears on mismatch, handles unreachable po
           canRelaunch: true
         });
       } else if (req.method === 'proxy.relaunch') {
-        p.context.__agyPowertoolsReceive(req.id, req.force
+        p.context.__agyPowertoolsReceive(req.id, req.payload.force
           ? { ok: true, relaunching: true, proxyActive: true }
           : { ok: false, portUnreachable: true, message: '代理端口 127.0.0.1:7897 无法连接' });
       }
@@ -613,10 +613,10 @@ test('startAddAccount awaits active sync and calls accounts.completeAdd, and ref
   const completeIdx = methods.indexOf('accounts.completeAdd');
   assert.ok(prepIdx >= 0 && syncIdx > prepIdx && completeIdx > syncIdx, `Expected prepareAdd -> syncActive -> completeAdd, got ${methods.join(',')}`);
   const completeCall = calls[completeIdx];
-  assert.equal(completeCall.email, 'beta@example.com');
-  assert.equal(completeCall.prevEmail, 'alpha@example.com');
-  assert.equal(completeCall.prevCredHash, 'HASH_A');
-  assert.equal(completeCall.relaunch, true);
+  assert.equal(completeCall.payload.email, 'beta@example.com');
+  assert.equal(completeCall.payload.prevEmail, 'alpha@example.com');
+  assert.equal(completeCall.payload.prevCredHash, 'HASH_A');
+  assert.equal(completeCall.payload.relaunch, true);
 
   // When syncActive reports credentialMismatch, refreshAccount MUST NOT call quota.observe
   const beforeObserve = calls.filter(c => c.method === 'quota.observe').length;
@@ -681,7 +681,7 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
     if (req.method === 'settings.get') {
       queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { enabled: true, sidebarFocusBell: true, sessionSearch: true, sessionSearchShortcut: true }));
     } else if (req.method === 'settings.set') {
-      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, req.settings));
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, req.payload.settings));
     }
   };
 
@@ -982,6 +982,182 @@ test('composer under-card status strip mounts outside .surface-composer-card aft
   // Empty state (no telemetry, no git repo) returns null so no empty padding bar renders
   const emptyResult = rootEl.type({ data: null, conversationId: '', source: {} });
   assert.equal(emptyResult, null);
+
+  p.context.__agyPowertools.dispose();
+});
+
+test('RPC envelope isolates sequence id and method from colliding payload fields like thought.profiles.delete({ id })', async () => {
+  const p = page(true);
+  p.context.__agyNativeAdapter.installPage = () => true;
+  let capturedEnv = null;
+  const envelopes = [];
+  p.context.__agyPanels = env => {
+    capturedEnv = env;
+    return { Page: () => null, Sidebar: () => null, dispose() {} };
+  };
+  p.context.__agyPowertoolsHost = raw => {
+    const env = JSON.parse(raw);
+    envelopes.push(env);
+    queueMicrotask(() => {
+      if (env.method === 'settings.get') {
+        p.context.__agyPowertoolsReceive(env.id, { enabled: true });
+      } else if (env.method === 'thought.profiles.delete') {
+        p.context.__agyPowertoolsReceive(env.id, { ok: true, deletedId: env.payload.id, echoedMethod: env.payload.method });
+      } else {
+        p.context.__agyPowertoolsReceive(env.id, { ok: true });
+      }
+    });
+  };
+  p.context.__agyInitialSettings = { enabled: true };
+  vm.runInContext(source, p.context);
+  await new Promise(r => setImmediate(r));
+  assert.ok(capturedEnv);
+
+  const reply = await capturedEnv.request('thought.profiles.delete', { id: 'prof_abc123', method: 'COLLIDING' });
+  assert.deepEqual(JSON.parse(JSON.stringify(reply)), { ok: true, deletedId: 'prof_abc123', echoedMethod: 'COLLIDING' });
+  const delEnv = envelopes.find(e => e.method === 'thought.profiles.delete');
+  assert.ok(delEnv);
+  assert.equal(Number.isInteger(delEnv.id), true);
+  assert.equal(delEnv.method, 'thought.profiles.delete');
+  assert.deepEqual(delEnv.payload, { id: 'prof_abc123', method: 'COLLIDING' });
+
+  p.context.__agyPowertools.dispose();
+});
+
+test('SidebarFocusPanel preserves identical hook order across visible/hidden transitions and skips prefetch when hidden', async () => {
+  const p = page(true);
+  p.context.location.pathname = '/c/idle-conv';
+  const renderedTrees = new Map();
+  let hookTrace = [];
+  let effectFns = [];
+  p.context.React = {
+    createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
+    useSyncExternalStore: () => { hookTrace.push('useSyncExternalStore'); return 0; },
+    useEffect: (fn, deps) => { hookTrace.push(`useEffect:${deps?.length ?? 0}`); effectFns.push(fn); },
+    useState: init => { hookTrace.push('useState'); return [typeof init === 'function' ? init() : init, () => {}]; },
+    useRef: v => { hookTrace.push('useRef'); return { current: v }; }
+  };
+  p.context.ReactDOM = {
+    createRoot(mount) {
+      return {
+        render(tree) { renderedTrees.set(mount.dataset?.agyPowertoolsRoot, tree); },
+        unmount() { renderedTrees.delete(mount.dataset?.agyPowertoolsRoot); }
+      };
+    }
+  };
+  const stateRequests = [];
+  p.context.__agyNativeAdapter = {
+    wrap: el => el,
+    installPage: () => true,
+    router: () => ({ navigate: async () => {}, subscribe: () => () => {} }),
+    conversationDirectory: () => ({
+      running: [{ id: 'run-1', title: 'Task 1', running: true, updatedAtMs: 1000 }],
+      unread: [],
+      projects: [],
+      byId: { 'run-1': { id: 'run-1', title: 'Task 1', running: true, updatedAtMs: 1000 } },
+      subagentIds: []
+    })
+  };
+  let capturedEnv = null;
+  p.context.__agyPanels = env => { capturedEnv = env; return { Page: () => null, Sidebar: () => null, dispose() {} }; };
+  p.context.__agyPowertoolsHost = raw => {
+    const req = JSON.parse(raw);
+    if (req.method === 'state') stateRequests.push(req.payload.conversationId);
+    queueMicrotask(() => {
+      if (req.method === 'settings.get') p.context.__agyPowertoolsReceive(req.id, { enabled: true, sidebarFocusBell: true });
+      else if (req.method === 'settings.set') p.context.__agyPowertoolsReceive(req.id, req.payload.settings);
+      else p.context.__agyPowertoolsReceive(req.id, { conversationId: req.payload.conversationId || '', turns: [], requests: [] });
+    });
+  };
+  const headerChildren = [];
+  const headerRow = { insertBefore(child) { child.isConnected = true; headerChildren.push(child); } };
+  const searchBtn = { id: 'search', isConnected: true, parentElement: headerRow, nextSibling: null };
+  const navBlock = { isConnected: true, parentElement: { insertBefore(child) { child.isConnected = true; } }, nextSibling: null };
+  const sidebarEl = { querySelector: sel => sel === '[data-testid="sidebar-navigation-items"]' ? navBlock : null };
+  p.context.getComputedStyle = () => ({ display: 'flex' });
+  p.document.querySelector = sel => sel.includes('Open Conversation Picker') ? searchBtn : sel.includes('Sidebar') ? sidebarEl : null;
+  p.context.__agyInitialSettings = { enabled: true, sidebarFocusBell: true };
+  vm.runInContext(source, p.context);
+  await new Promise(r => setImmediate(r));
+
+  // Click bell to mount SidebarFocusPanel
+  const bellTree = renderedTrees.get('sidebar-bell');
+  bellTree.type(bellTree.props).props.onClick({ preventDefault() {}, stopPropagation() {} });
+  const focusTree = renderedTrees.get('sidebar-focus');
+  assert.ok(focusTree);
+
+  const renderWithStrictHooks = () => {
+    hookTrace = [];
+    effectFns = [];
+    const out = focusTree.type(focusTree.props);
+    return { out, hooks: [...hookTrace], effects: [...effectFns] };
+  };
+
+  // Visible render
+  const openRender = renderWithStrictHooks();
+  assert.ok(openRender.out);
+  assert.deepEqual(openRender.hooks, ['useSyncExternalStore', 'useEffect:2']);
+  stateRequests.length = 0;
+  for (const fn of openRender.effects) fn();
+  assert.ok(stateRequests.includes('run-1'));
+
+  // Toggle sidebarFocusBell off -> hidden render MUST execute exact same hook signature and skip prefetch
+  await capturedEnv.change({ sidebarFocusBell: false });
+  const hiddenRender = renderWithStrictHooks();
+  assert.equal(hiddenRender.out, null);
+  assert.deepEqual(hiddenRender.hooks, openRender.hooks);
+  stateRequests.length = 0;
+  for (const fn of hiddenRender.effects) fn();
+  assert.equal(stateRequests.length, 0);
+
+  // Toggle enabled off -> hidden render still executes exact same hook signature
+  await capturedEnv.change({ enabled: false });
+  const disabledRender = renderWithStrictHooks();
+  assert.equal(disabledRender.out, null);
+  assert.deepEqual(disabledRender.hooks, openRender.hooks);
+  assert.equal(p.context.__agyPowertools.status.healthy, true);
+
+  p.context.__agyPowertools.dispose();
+});
+
+test('refresh does not lock settingsLoaded=true if applyOptions throws before mount completes', async () => {
+  const p = page(true);
+  let intervalCb = null;
+  p.context.setInterval = cb => { intervalCb = cb; return 1; };
+  let settingsGetCount = 0;
+  let shouldFailApply = false;
+  let appliedLimit = 0;
+  p.context.__agyNativeAdapter = {
+    wrap: el => el,
+    setContextLimit(limit) {
+      if (shouldFailApply) throw new Error('transient apply failure');
+      appliedLimit = limit;
+    }
+  };
+  p.context.__agyPowertoolsHost = raw => {
+    const req = JSON.parse(raw);
+    if (req.method === 'settings.get') {
+      settingsGetCount++;
+      shouldFailApply = settingsGetCount === 1;
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { enabled: true, contextLimit: 500000 }));
+      return;
+    }
+    queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, {}));
+  };
+  p.context.__agyInitialSettings = { enabled: true, contextLimit: 0 };
+  vm.runInContext(source, p.context);
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(settingsGetCount, 1);
+  assert.equal(appliedLimit, 0);
+
+  // Next refresh tick retries settings.get because settingsLoaded was NOT prematurely set to true
+  await intervalCb();
+  assert.equal(settingsGetCount, 2);
+  assert.equal(appliedLimit, 500000);
+
+  // Subsequent refresh tick sees settingsLoaded=true and does not re-fetch settings.get
+  await intervalCb();
+  assert.equal(settingsGetCount, 2);
 
   p.context.__agyPowertools.dispose();
 });
