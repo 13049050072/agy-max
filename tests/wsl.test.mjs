@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { createConnection, createServer } from 'node:net';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -425,4 +427,183 @@ test('pruneStaleRuntimeRecords removes dead PID runtime JSON files while keeping
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+function createFakeWorkerProcess() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stdin = new EventEmitter();
+  child.stdin.destroyed = false;
+  child.stdin.written = [];
+  child.stdin.write = chunk => { child.stdin.written.push(Buffer.from(chunk)); };
+  child.stdin.end = () => { child.stdin.destroyed = true; };
+  child.killed = false;
+  child.exitCode = null;
+  child.killCount = 0;
+  child.kill = () => {
+    child.killed = true;
+    child.killCount++;
+  };
+  return child;
+}
+
+test('createWslCdpBridge rejects non-READY startup stdout and malformed READY frames, then recovers cleanly', async () => {
+  const spawned = [];
+  let mode = 'noise';
+  const bridge = createWslCdpBridge({
+    resolveRuntime: () => ({ command: 'fake-node', extraEnv: {} }),
+    readyTimeoutMs: 500,
+    spawnProcess: () => {
+      const child = createFakeWorkerProcess();
+      spawned.push(child);
+      queueMicrotask(() => {
+        if (mode === 'noise') {
+          child.stdout.emit('data', Buffer.from('Warning: Electron startup diagnostic\n'));
+        } else if (mode === 'bad-id') {
+          const frame = Buffer.alloc(9);
+          frame[0] = 5;
+          frame.writeUInt32BE(1, 1);
+          frame.writeUInt32BE(0, 5);
+          child.stdout.emit('data', frame);
+        } else if (mode === 'bad-len') {
+          const frame = Buffer.alloc(9);
+          frame[0] = 5;
+          frame.writeUInt32BE(0, 1);
+          frame.writeUInt32BE(4, 5);
+          child.stdout.emit('data', frame);
+        } else if (mode === 'split-ready') {
+          const frame = Buffer.alloc(9);
+          frame[0] = 5;
+          child.stdout.emit('data', frame.subarray(0, 3));
+          queueMicrotask(() => child.stdout.emit('data', frame.subarray(3)));
+        }
+      });
+      return child;
+    }
+  });
+
+  try {
+    await assert.rejects(() => bridge.endpointFor(9222), /握手帧无效/);
+    assert.equal(spawned[0].killCount, 1);
+
+    mode = 'bad-id';
+    await assert.rejects(() => bridge.endpointFor(9222), /握手帧无效/);
+    assert.equal(spawned[1].killCount, 1);
+
+    mode = 'bad-len';
+    await assert.rejects(() => bridge.endpointFor(9222), /握手帧无效/);
+    assert.equal(spawned[2].killCount, 1);
+
+    mode = 'split-ready';
+    const ep = await bridge.endpointFor(9222);
+    assert.equal(ep.host, '127.0.0.1');
+    assert.ok(ep.port > 0);
+    assert.equal(spawned.length, 4);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('createWslCdpBridge clears worker state synchronously on readyTimeoutMs even if child ignores kill', async () => {
+  const spawned = [];
+  const bridge = createWslCdpBridge({
+    resolveRuntime: () => ({ command: 'fake-node', extraEnv: {} }),
+    readyTimeoutMs: 40,
+    spawnProcess: () => {
+      const child = createFakeWorkerProcess();
+      const idx = spawned.push(child);
+      if (idx === 1) {
+        // First worker hangs and ignores kill() without emitting exit.
+        child.kill = () => { child.killCount++; };
+      } else {
+        queueMicrotask(() => {
+          const ready = Buffer.alloc(9);
+          ready[0] = 5;
+          child.stdout.emit('data', ready);
+        });
+      }
+      return child;
+    }
+  });
+
+  try {
+    await assert.rejects(() => bridge.endpointFor(9222), /超时/);
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].killCount, 1);
+
+    // Immediate retry must spawn a fresh worker rather than reusing the rejected workerReady promise.
+    const ep = await bridge.endpointFor(9222);
+    assert.equal(spawned.length, 2);
+    assert.ok(ep.port > 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('createWslCdpBridge deduplicates concurrent ensureServer calls and enforces max frame cap on both sides', async () => {
+  let serverCreations = 0;
+  let capturedScript = '';
+  const workers = [];
+  const bridge = createWslCdpBridge({
+    resolveRuntime: () => ({ command: 'fake-node', extraEnv: {} }),
+    createTcpServer: handler => {
+      serverCreations++;
+      return createServer(handler);
+    },
+    spawnProcess: (_cmd, args) => {
+      capturedScript = args[1] || '';
+      const child = createFakeWorkerProcess();
+      workers.push(child);
+      queueMicrotask(() => {
+        const ready = Buffer.alloc(9);
+        ready[0] = 5;
+        child.stdout.emit('data', ready);
+      });
+      return child;
+    }
+  });
+
+  try {
+    const eps = await Promise.all([
+      bridge.endpointFor(9222),
+      bridge.endpointFor(9222),
+      bridge.endpointFor(9222),
+      bridge.endpointFor(9222),
+      bridge.endpointFor(9222)
+    ]);
+    assert.equal(serverCreations, 1, 'concurrent endpointFor calls must share one TCP server');
+    assert.equal(new Set(eps.map(e => e.port)).size, 1);
+
+    // Host side must kill and reset worker on oversized post-handshake frame (> 16 MiB).
+    const oversized = Buffer.alloc(9);
+    oversized[0] = 2;
+    oversized.writeUInt32BE(1, 1);
+    oversized.writeUInt32BE(16 * 1024 * 1024 + 1, 5);
+    workers[0].stdout.emit('data', oversized);
+    assert.equal(workers[0].killCount, 1);
+
+    // Subsequent call must spawn a replacement worker.
+    await bridge.endpointFor(9222);
+    assert.equal(workers.length, 2);
+  } finally {
+    await bridge.close();
+  }
+
+  // WIN_BRIDGE_SCRIPT must exit cleanly on oversized incoming frame and register stdout error handler.
+  assert.match(capturedScript, /process\.stdout\.on\('error'/);
+  const workerExit = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', capturedScript], { stdio: ['pipe', 'pipe', 'ignore'] });
+    child.on('error', reject);
+    child.stdout.once('data', ready => {
+      assert.equal(ready.length, 9);
+      assert.equal(ready[0], 5);
+      const badFrame = Buffer.alloc(9);
+      badFrame[0] = 2;
+      badFrame.writeUInt32BE(1, 1);
+      badFrame.writeUInt32BE(16 * 1024 * 1024 + 1, 5);
+      child.stdin.write(badFrame);
+    });
+    child.on('close', code => resolve(code));
+  });
+  assert.equal(workerExit, 1);
 });

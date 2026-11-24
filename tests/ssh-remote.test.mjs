@@ -2,16 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   validateSshDestination,
+  parseSshTarget,
   parseSshWindowTitle,
   resolveSshWindowConfig,
   resolveRemotePosixPath,
   buildRemoteWorkerCode,
+  buildShellBootstrap,
   createRemoteTelemetryBridge
 } from '../lib/ssh-remote.mjs';
 import { parseSessionData } from '../lib/session-parser.mjs';
@@ -438,6 +440,156 @@ test('startNativeIntegration routes SSH windows to remoteTelemetry, isolates dis
   } finally {
     await stop?.();
     globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parseSshTarget splits direct host:port and [ipv6]:port targets while preserving aliases and ssh:// URIs', async () => {
+  assert.deepEqual(parseSshTarget('root@example.com:11430'), { host: 'root@example.com', port: '11430' });
+  assert.deepEqual(parseSshTarget('example.com:11430'), { host: 'example.com', port: '11430' });
+  assert.deepEqual(parseSshTarget('alice@203.0.113.10:2222'), { host: 'alice@203.0.113.10', port: '2222' });
+  assert.deepEqual(parseSshTarget('alice@[::1]:2222'), { host: 'alice@::1', port: '2222' });
+  assert.deepEqual(parseSshTarget('[::1]:2222'), { host: '::1', port: '2222' });
+  assert.deepEqual(parseSshTarget('[2001:db8::1%eth0]:2222'), { host: '2001:db8::1%eth0', port: '2222' });
+  assert.deepEqual(parseSshTarget('alice@[::1]'), { host: 'alice@::1', port: '' });
+  assert.deepEqual(parseSshTarget('my-server'), { host: 'my-server', port: '' });
+  assert.deepEqual(parseSshTarget('alice@203.0.113.10'), { host: 'alice@203.0.113.10', port: '' });
+  assert.deepEqual(parseSshTarget('ssh://bob@devbox:2222'), { host: 'ssh://bob@devbox:2222', port: '' });
+  assert.deepEqual(parseSshTarget('ssh://[::1]:2222'), { host: 'ssh://[::1]:2222', port: '' });
+  assert.deepEqual(parseSshTarget('::1'), { host: '::1', port: '' });
+  assert.throws(() => parseSshTarget('-oProxyCommand=calc'), /SSH/);
+
+  const dir = mkdtempSync(join(tmpdir(), 'agy-ssh-port-'));
+  const spawnCalls = [];
+  const bridge = createRemoteTelemetryBridge({
+    userDataDir: dir,
+    connectTimeoutMs: 5000,
+    requestTimeoutMs: 5000,
+    spawnProcess: (command, args) => {
+      spawnCalls.push({ command, args });
+      const child = new EventEmitter();
+      child.exitCode = null;
+      child.signalCode = null;
+      child.stdout = new EventEmitter();
+      child.stdout.setEncoding = () => {};
+      child.stderr = new EventEmitter();
+      child.stderr.setEncoding = () => {};
+      child.stdin = new EventEmitter();
+      child.stdin.write = chunk => {
+        const text = String(chunk);
+        if (text.includes('exec "$NODE"')) {
+          queueMicrotask(() => child.stdout.emit('data', '__AGY_PT__:{"type":"ready","node":"22.0.0","pid":1}\n'));
+        } else {
+          for (const line of text.split('\n').filter(Boolean)) {
+            const req = JSON.parse(line);
+            queueMicrotask(() => child.stdout.emit('data', `__AGY_PT__:${JSON.stringify({ type: 'res', id: req.id, result: { ok: true } })}\n`));
+          }
+        }
+      };
+      child.stdin.end = () => {
+        child.exitCode = 0;
+        child.emit('exit', 0);
+        child.emit('close', 0);
+      };
+      child.kill = () => {
+        child.signalCode = 'SIGTERM';
+        child.emit('exit', null, 'SIGTERM');
+        child.emit('close', null, 'SIGTERM');
+      };
+      return child;
+    }
+  });
+
+  try {
+    await bridge.state('root@example.com:11430', { conversationId: 'c1' });
+    await bridge.state('alice@[::1]:2222', { conversationId: 'c1' });
+    await bridge.state('ssh://bob@devbox:2222', { conversationId: 'c1' });
+    await bridge.state('my-server', { conversationId: 'c1' });
+
+    assert.equal(spawnCalls.length, 4);
+    assert.deepEqual(spawnCalls[0].args.slice(-6), ['-p', '11430', '--', 'root@example.com', 'sh', '-s']);
+    assert.deepEqual(spawnCalls[1].args.slice(-6), ['-p', '2222', '--', 'alice@::1', 'sh', '-s']);
+    assert.equal(spawnCalls[2].args.includes('-p'), false);
+    assert.deepEqual(spawnCalls[2].args.slice(-4), ['--', 'ssh://bob@devbox:2222', 'sh', '-s']);
+    assert.equal(spawnCalls[3].args.includes('-p'), false);
+    assert.deepEqual(spawnCalls[3].args.slice(-4), ['--', 'my-server', 'sh', '-s']);
+  } finally {
+    await bridge.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildShellBootstrap prefers agy-node and selects highest node:zlib-capable semver instead of lexicographical glob order', async () => {
+  const bootstrap = buildShellBootstrap();
+  assert.equal(bootstrap.endsWith('\n'), true);
+  assert.equal(bootstrap.trimEnd().includes('\n'), false, 'bootstrap must remain single-line for sh -s');
+  assert.match(bootstrap, /agy-node/);
+  assert.match(bootstrap, /require\("node:zlib"\)/);
+  assert.match(bootstrap, /exec "\$NODE" --no-warnings -e '/);
+
+  if (process.platform === 'win32' || !existsSync('/bin/sh')) return;
+
+  const makeFakeNode = (filePath, { version, supportsZlib = true, tag }) => {
+    mkdirSync(join(filePath, '..'), { recursive: true });
+    const script = [
+      '#!/bin/sh',
+      'if [ "$1" = "-e" ]; then',
+      supportsZlib
+        ? `  printf '%s' "$(( ${version[0]} * 1000000 + ${version[1]} * 1000 + ${version[2]} ))"; exit 0`
+        : '  exit 1',
+      'fi',
+      `printf 'SELECTED:%s\\n' '${tag}'`,
+      'exit 0'
+    ].join('\n') + '\n';
+    writeFileSync(filePath, script, 'utf8');
+    chmodSync(filePath, 0o755);
+  };
+
+  const runBootstrap = homeDir => new Promise((resolve, reject) => {
+    const child = spawn('/bin/sh', ['-s'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { HOME: homeDir, PATH: '/usr/bin:/bin' }
+    });
+    let out = '';
+    let err = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', d => { out += d; });
+    child.stderr.on('data', d => { err += d; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, out, err }));
+    child.stdin.end(bootstrap);
+  });
+
+  const dir = mkdtempSync(join(tmpdir(), 'agy-ssh-boot-'));
+  try {
+    // 1. Lexicographically 'v9.11.2' > 'v8.17.0' > 'v22...' and 'v99.2.0' > 'v99.14.0';
+    //    must reject broken v8 (no node:zlib) and pick highest numeric semver v99.14.0.
+    const home1 = join(dir, 'home-nvm');
+    makeFakeNode(join(home1, '.nvm/versions/node/v8.17.0/bin/node'), { version: [8, 17, 0], supportsZlib: false, tag: 'v8' });
+    makeFakeNode(join(home1, '.nvm/versions/node/v9.11.2/bin/node'), { version: [9, 11, 2], supportsZlib: true, tag: 'v9' });
+    makeFakeNode(join(home1, '.nvm/versions/node/v99.2.0/bin/node'), { version: [99, 2, 0], supportsZlib: true, tag: 'v99.2' });
+    makeFakeNode(join(home1, '.nvm/versions/node/v99.14.0/bin/node'), { version: [99, 14, 0], supportsZlib: true, tag: 'v99.14' });
+    const res1 = await runBootstrap(home1);
+    assert.equal(res1.code, 0, res1.err);
+    assert.equal(res1.out.trim(), 'SELECTED:v99.14');
+
+    // 2. Working agy-node must be preferred over nvm candidates.
+    const home2 = join(dir, 'home-agy');
+    makeFakeNode(join(home2, '.gemini/antigravity/bin/agy-node'), { version: [22, 0, 0], supportsZlib: true, tag: 'agy-node' });
+    makeFakeNode(join(home2, '.nvm/versions/node/v99.14.0/bin/node'), { version: [99, 14, 0], supportsZlib: true, tag: 'v99.14' });
+    const res2 = await runBootstrap(home2);
+    assert.equal(res2.code, 0, res2.err);
+    assert.equal(res2.out.trim(), 'SELECTED:agy-node');
+
+    // 3. Broken agy-node (no node:zlib) must fall back to highest working nvm candidate.
+    const home3 = join(dir, 'home-agy-broken');
+    makeFakeNode(join(home3, '.gemini/antigravity/bin/agy-node'), { version: [12, 0, 0], supportsZlib: false, tag: 'agy-broken' });
+    makeFakeNode(join(home3, '.nvm/versions/node/v99.14.0/bin/node'), { version: [99, 14, 0], supportsZlib: true, tag: 'v99.14' });
+    const res3 = await runBootstrap(home3);
+    assert.equal(res3.code, 0, res3.err);
+    assert.equal(res3.out.trim(), 'SELECTED:v99.14');
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
