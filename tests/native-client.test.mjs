@@ -897,3 +897,82 @@ test('composer text helpers read/write plain Lexical state and distinguish neste
   assert.equal(adapter.openSideChat, undefined);
   assert.equal(adapter.setSideChatCommand, undefined);
 });
+
+test('unarchiveConversations and deleteConversations sync Redux summaries optimistically and handle batch progress & errors', async () => {
+  const dispatched = [];
+  const updatedCalls = [];
+  const deletedTrajectories = [];
+  const deletedSummaries = [];
+  const summaries = {
+    'arch-1': { summary: 'Chat 1', annotations: { archived: true } },
+    'arch-ghost': { summary: 'Ghost chat', annotations: { archived: true } },
+    'arch-fail': { summary: 'Fail chat', annotations: { archived: true } }
+  };
+  const reduxStore = {
+    getState: () => ({ trajectorySummaries: { summaries } }),
+    dispatch: action => dispatched.push(action)
+  };
+  const svc = {
+    forkConversation: async () => ({}),
+    updateConversationAnnotations: async (ids, annotations, merge) => {
+      updatedCalls.push({ ids, annotations, merge });
+    },
+    deleteCascadeTrajectory: async id => {
+      if (id === 'arch-ghost') {
+        const err = new Error('Trajectory not found on disk');
+        err.code = 5;
+        throw err;
+      }
+      if (id === 'arch-fail') throw new Error('disk locked');
+      deletedTrajectories.push(id);
+    },
+    deleteSummary: async ({ cascadeId }) => {
+      deletedSummaries.push(cascadeId);
+    }
+  };
+  const element = {
+    '__reactFiber$root': {
+      tag: 10,
+      type: {},
+      memoizedProps: { value: svc },
+      return: {
+        tag: 10,
+        type: {},
+        memoizedProps: { value: { store: reduxStore } },
+        return: null
+      }
+    }
+  };
+  const context = vm.createContext({
+    document: { querySelector: () => element },
+    YF: { ConversationAnnotationsSchema: { name: 'ConversationAnnotations' } },
+    Wb: (schema, data) => ({ $schema: schema.name, ...data })
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const adapter = context.__agyNativeAdapter;
+
+  const restoreRes = await adapter.unarchiveConversations(['arch-1', 'arch-1', 'bad id!']);
+  assert.deepEqual(Array.from(restoreRes.ids), ['arch-1']);
+  assert.equal(updatedCalls.length, 1);
+  assert.deepEqual(Array.from(updatedCalls[0].ids), ['arch-1']);
+  assert.equal(updatedCalls[0].annotations.archived, false);
+  assert.equal(updatedCalls[0].annotations.$schema, 'ConversationAnnotations');
+  assert.equal(updatedCalls[0].merge, true);
+  assert.ok(dispatched.some(a => a.type === 'trajectorySummaries/applyOptimisticAnnotationBatch'));
+  assert.ok(dispatched.some(a => a.type === 'trajectorySummaries/settleOptimisticAnnotationBatch'));
+
+  dispatched.length = 0;
+  const progressLog = [];
+  const delRes = await adapter.deleteConversations(['arch-1', 'arch-ghost', 'arch-fail'], {
+    onProgress: p => progressLog.push(`${p.completed}/${p.total}:${p.id}`)
+  });
+  assert.equal(delRes.ok, false);
+  assert.equal(delRes.deletedCount, 2);
+  assert.deepEqual(Array.from(delRes.deletedIds), ['arch-1', 'arch-ghost']);
+  assert.equal(delRes.failed.length, 1);
+  assert.equal(delRes.failed[0].id, 'arch-fail');
+  assert.deepEqual(deletedTrajectories, ['arch-1']);
+  assert.deepEqual(deletedSummaries, ['arch-ghost']);
+  assert.deepEqual(progressLog, ['1/3:arch-1', '2/3:arch-ghost', '3/3:arch-fail']);
+  assert.ok(dispatched.some(a => a.type === 'trajectorySummaries/rollbackDelete' && a.payload.cascadeId === 'arch-fail'));
+});

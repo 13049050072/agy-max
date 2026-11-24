@@ -18,7 +18,7 @@ const panelsSource = readFileSync(new URL('../lib/prism-panels.js', import.meta.
 const settingsSource = readFileSync(new URL('../lib/settings.mjs', import.meta.url), 'utf8');
 const zhTwSource = readFileSync(new URL('../lib/zh-tw.mjs', import.meta.url), 'utf8');
 
-function createHarness({ initialOptions = {}, requestHandler = async () => ({}), clipboardLog = [], downloads = [] } = {}) {
+function createHarness({ initialOptions = {}, requestHandler = async () => ({}), clipboardLog = [], downloads = [], adapter = null, jumpToSearchHit = null } = {}) {
   let opts = { ...DEFAULT_SETTINGS, ...initialOptions };
   const changes = [];
   const requests = [];
@@ -88,7 +88,9 @@ function createHarness({ initialOptions = {}, requestHandler = async () => ({}),
     async request(method, payload) {
       requests.push({ method, payload });
       return requestHandler(method, payload);
-    }
+    },
+    ...(adapter ? { adapter } : {}),
+    ...(jumpToSearchHit ? { jumpToSearchHit } : {})
   };
 
   const headNodes = [];
@@ -715,6 +717,95 @@ test('BetaAndArchiveSection & ConfigBackupSection invoke wallpaper, archive, exp
   await h.flushMicrotasks();
   assert.equal(h.getOptions().cornerStyle, 'soft');
   assert.equal(h.getOptions().linkTarget, 'external');
+});
+
+test('ArchivedChatsSection groups archived chats by project, filters, unarchives, and supports one-click batch deletion', async () => {
+  const now = Date.now();
+  const byId = {
+    'active-1': { id: 'active-1', title: 'Active chat', projectId: 'p-magpie', projectName: 'magpie', archived: false, updatedAtMs: now - 1000 },
+    'arch-1': { id: 'arch-1', title: '确认助手是否已回来', projectId: 'p-magpie', projectName: 'magpie', archived: true, updatedAtMs: now - 3600_000 },
+    'arch-2': { id: 'arch-2', title: '排查 agy-cli prefill 报错', projectId: 'p-magpie', projectName: 'magpie', archived: true, updatedAtMs: now - 7200_000 },
+    'arch-3': { id: 'arch-3', title: '整理侧栏置顶逻辑', projectId: 'p-max', projectName: 'agy-max', archived: true, updatedAtMs: now - 40 * 86400_000 },
+    'arch-4': { id: 'arch-4', title: '随手提问', projectId: 'outside-of-project', projectName: '', archived: true, updatedAtMs: now - 50 * 86400_000 }
+  };
+  const unarchivedLog = [];
+  const deletedBatches = [];
+  const jumped = [];
+  const adapter = {
+    conversationDirectory: () => ({ byId }),
+    async unarchiveConversations(ids) {
+      unarchivedLog.push(...ids);
+      for (const id of ids) if (byId[id]) byId[id].archived = false;
+      return { ok: true, count: ids.length, ids };
+    },
+    async deleteConversations(ids, opts) {
+      deletedBatches.push([...ids]);
+      ids.forEach((id, idx) => {
+        delete byId[id];
+        opts?.onProgress?.({ completed: idx + 1, total: ids.length, id });
+      });
+      return { ok: true, deletedCount: ids.length, deletedIds: ids, failed: [] };
+    }
+  };
+  const h = createHarness({
+    adapter,
+    jumpToSearchHit: hit => jumped.push(hit)
+  });
+
+  // Initial grouped render inside BetaAndArchiveSection
+  let tree = h.render(h.panels.BetaAndArchiveSection);
+  const groups = h.findAll(tree, n => n.props?.['data-testid'] === 'agy-archived-group');
+  assert.equal(groups.length, 3);
+  assert.ok(h.collectText(groups[0]).includes('magpie'));
+  assert.ok(h.collectText(groups[0]).includes('2 个聊天'));
+  assert.ok(h.collectText(h.findByTestId(tree, 'agy-archived-delete-all-btn')).includes('一键删除全部 (4)'));
+
+  // Clicking title navigates to archived chat
+  const openBtns = h.findAll(tree, n => n.props?.['data-testid'] === 'agy-archived-open-btn');
+  openBtns[0].props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(jumped)), [{ conversationId: 'arch-1', projectId: 'p-magpie' }]);
+
+  // Single unarchive restores chat immediately
+  const restoreBtns = h.findAll(tree, n => n.props?.['data-testid'] === 'agy-archived-restore-btn');
+  restoreBtns[0].props.onClick();
+  await h.flushMicrotasks();
+  assert.deepEqual(unarchivedLog, ['arch-1']);
+
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  assert.ok(h.collectText(h.findByTestId(tree, 'agy-archived-delete-all-btn')).includes('一键删除全部 (3)'));
+
+  // Single delete uses inline two-step confirm
+  const delBtns = h.findAll(tree, n => n.props?.['data-testid'] === 'agy-archived-delete-btn');
+  delBtns[0].props.onClick();
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  assert.equal(deletedBatches.length, 0);
+  h.findByTestId(tree, 'agy-archived-row-confirm').props.onClick();
+  await h.flushMicrotasks();
+  assert.deepEqual(deletedBatches, [['arch-2']]);
+
+  // Filter by time (older30d) / search and run one-click batch delete
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  h.findByTestId(tree, 'agy-archived-search-input').props.onChange({ target: { value: '置顶' } });
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  assert.ok(h.collectText(h.findByTestId(tree, 'agy-archived-delete-all-btn')).includes('一键删除筛选结果 (1)'));
+  h.findByTestId(tree, 'agy-archived-delete-all-btn').props.onClick();
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  assert.ok(h.findByTestId(tree, 'agy-archived-confirm-banner'));
+  h.findByTestId(tree, 'agy-archived-confirm-ok').props.onClick();
+  await h.flushMicrotasks();
+  assert.deepEqual(deletedBatches, [['arch-2'], ['arch-3']]);
+
+  // Clear search and delete remaining archived chat in one click
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  h.findByTestId(tree, 'agy-archived-search-input').props.onChange({ target: { value: '' } });
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  assert.ok(h.collectText(h.findByTestId(tree, 'agy-archived-delete-all-btn')).includes('一键删除全部 (1)'));
+  h.findByTestId(tree, 'agy-archived-delete-all-btn').props.onClick();
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  h.findByTestId(tree, 'agy-archived-confirm-ok').props.onClick();
+  await h.flushMicrotasks();
+  tree = h.render(h.panels.BetaAndArchiveSection);
+  assert.ok(h.findByTestId(tree, 'agy-archived-empty'));
 });
 
 test('5-locale resolution (zh-CN, zh-TW, yue, en, ja), zero middle-dots, no ESM syntax, and toZhTw glyph purity', () => {

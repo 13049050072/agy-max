@@ -157,6 +157,10 @@ test('Swarm UI strings translate cleanly in zh-CN and zh-TW without middle dots 
   assert.equal(t('Prevent sleep', 'zh-CN'), '防止休眠');
   assert.equal(t('Context and quota indicator', 'zh-TW'), '上下文與額度指示器');
   assert.equal(t('Delete Permanently', 'zh-TW'), '永久刪除');
+  assert.equal(t('Archived Only', 'zh-CN'), '仅显示已归档');
+  assert.equal(t('Archived Only', 'zh-TW'), '僅顯示已歸檔');
+  assert.equal(t('Restore Conversation', 'zh-CN'), '还原会话');
+  assert.equal(t('Restore Conversation', 'zh-TW'), '還原會話');
   const i18nSrc = readFileSync('lib/native-i18n.js', 'utf8');
   assert.ok(i18nSrc.includes('.post-body') && i18nSrc.includes('#ov-frame'));
 });
