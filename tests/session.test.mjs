@@ -140,3 +140,63 @@ test('formatConversationMarkdown cleans system tags, hydrates truncated content 
   }
 });
 
+test('parseSessionData updates context tokens and percentage immediately after /compact CHECKPOINT before next turn', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-compact-'));
+  try {
+    const logs = join(root, 'brain', 'compact-conv', '.system_generated', 'logs');
+    mkdirSync(logs, { recursive: true });
+    mkdirSync(join(root, 'conversations'), { recursive: true });
+    const steps = [
+      { step_index: 0, type: 'USER_INPUT', created_at: '2026-11-25T01:00:00Z', content: '<USER_REQUEST>explain compaction</USER_REQUEST>' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', created_at: '2026-11-25T01:05:00Z', input_tokens: 2997, cache_read_tokens: 84981, output_tokens: 4327, content: 'Detailed reply' },
+      { step_index: 2, type: 'USER_INPUT', created_at: '2026-11-25T01:08:00Z', content: '<USER_REQUEST>/compact</USER_REQUEST>' },
+      { step_index: 3, type: 'CHECKPOINT', created_at: '2026-11-25T01:08:16Z', input_tokens: 93213, cache_read_tokens: 0, output_tokens: 2837, content: '# Resuming from a compaction\n<summary>short summary</summary>' }
+    ];
+    writeFileSync(join(logs, 'transcript.jsonl'), steps.map(s => JSON.stringify(s)).join('\n') + '\n');
+
+    const preCategories = concat(
+      bytes(1, concat(bytes(1, 'System Prompt'), integer(4, 15000))),
+      bytes(1, concat(bytes(1, 'Tools'), integer(4, 28032))),
+      bytes(1, concat(bytes(1, 'Chat Messages'), integer(4, 56291)))
+    );
+    const preContext = concat(integer(1, 99323), integer(4, 786432), bytes(3, preCategories));
+    const preGen = concat(
+      integer(2, 1),
+      bytes(1, concat(
+        bytes(4, concat(integer(2, 2997), integer(3, 4327), integer(5, 84981))),
+        bytes(9, bytes(10, preContext)),
+        bytes(21, 'Gemini 4 Carbon (High)')
+      ))
+    );
+    const cpMetadata = concat(
+      bytes(1, timestamp(1795540096)),
+      bytes(8, timestamp(1795540152)),
+      bytes(9, concat(integer(2, 93213), integer(3, 2837), integer(9, 89), integer(10, 2748)))
+    );
+    const dbPath = join(root, 'conversations', 'compact-conv.db');
+    const db = new DatabaseSync(dbPath);
+    db.exec('CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB); CREATE TABLE steps(idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB);');
+    db.prepare('INSERT INTO gen_metadata VALUES (?, ?)').run(0, preGen);
+    db.prepare('INSERT INTO steps VALUES (?, ?, ?)').run(3, 23, cpMetadata);
+    db.close();
+
+    const state = parseSessionData('compact-conv', { includeSessions: false, appDataDir: root });
+    assert.equal(state.contextWindow.compactions, 1);
+    assert.equal(state.contextWindow.usedTokens, 34435);
+    assert.equal(state.contextWindow.usedPercent, 4.4);
+    assert.equal(state.contextWindow.inputTokens, 0);
+    assert.equal(state.contextWindow.cacheReadTokens, 0);
+    assert.equal(state.turns.at(-1).status, 'complete');
+
+    const fallbackLogs = join(root, 'brain', 'compact-fallback', '.system_generated', 'logs');
+    mkdirSync(fallbackLogs, { recursive: true });
+    writeFileSync(join(fallbackLogs, 'transcript.jsonl'), steps.map(s => JSON.stringify(s)).join('\n') + '\n');
+    const fallbackState = parseSessionData('compact-fallback', { includeSessions: false, appDataDir: root });
+    assert.equal(fallbackState.contextWindow.compactions, 1);
+    assert.equal(fallbackState.contextWindow.usedTokens, 2837);
+    assert.equal(fallbackState.contextWindow.cacheReadTokens, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

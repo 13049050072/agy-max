@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {contextSnapshot,modelContexts,shortModelName} from '../lib/context.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import {compactGeneration,contextSnapshot,modelContexts,shortModelName} from '../lib/context.mjs';
 const categories=[{key:'messages',label:'Chat Messages',tokens:293170},{key:'tools',label:'Tools',tokens:7336},{key:'system',label:'System Prompt',tokens:12380,children:[{label:'skills',tokens:3678}]}];
 test('provider usage replaces the inflated local estimate from the same generation',()=>{
  const c=contextSnapshot({providerInputTokens:248366,context:{usedTokens:312886,maxTokens:256000,categories}});
@@ -46,4 +46,53 @@ test('modelContexts tracks Orchestrator planner and execution models, short name
  assert.equal(sparseOrch.models.length,2);
  assert.equal(sparseOrch.models[0].role,'planner');assert.equal(sparseOrch.models[0].shortName,'Orchestrator');assert.equal(sparseOrch.models[0].isCurrent,true);
  assert.equal(sparseOrch.models[1].role,'execution');assert.equal(sparseOrch.models[1].shortName,'Hydrogen');assert.equal(sparseOrch.models[1].isCurrent,false);
+});
+
+test('compactGeneration projects post-compaction tokens immediately after CHECKPOINT and yields once a new generation runs',()=>{
+ const preGen={
+  stepIndices:[38],
+  modelName:'Gemini 4 Carbon (High)',
+  providerInputTokens:87978,
+  inputTokens:2997,
+  cacheReadTokens:84981,
+  outputTokens:4327,
+  context:{
+   usedTokens:99323,
+   maxTokens:786432,
+   categories:[
+    {key:'system',label:'System Prompt',tokens:3992},
+    {key:'tools',label:'Tools',tokens:13160},
+    {key:'skills',label:'Skills',tokens:13112},
+    {key:'rules',label:'Rules',tokens:7254},
+    {key:'subagents',label:'Subagents',tokens:2885},
+    {key:'plugins',label:'Plugins',tokens:1631},
+    {key:'unspecified',label:'Unspecified',tokens:558},
+    {key:'mcp',label:'Mcp Tools',tokens:440},
+    {key:'messages',label:'Chat Messages',tokens:56291}
+   ]
+  }
+ };
+ const before=contextSnapshot(preGen);
+ assert.equal(before.usedTokens,87978);
+ assert.equal(before.usedPercent,11.2);
+
+ const projected=compactGeneration(preGen,[preGen],[{stepIndex:40,summaryTokens:2748}]);
+ assert.equal(projected.compacted,true);
+ assert.equal(projected.inputTokens,0);
+ assert.equal(projected.cacheReadTokens,0);
+ const after=contextSnapshot(projected);
+ assert.equal(after.usedTokens,34435);
+ assert.equal(after.usedPercent,4.4);
+ const msgCat=after.categories.find(c=>c.label==='Chat Messages');
+ assert.ok(msgCat.tokens<3000);
+
+ const mc=modelContexts([preGen],[40],[{stepIndex:40,summaryTokens:2748}]);
+ assert.equal(mc.compactions,1);
+ assert.equal(mc.models[0].usedTokens,34435);
+ assert.equal(mc.models[0].usedPercent,4.4);
+ assert.equal(mc.models[0].compactions,1);
+
+ const postGen={...preGen,stepIndices:[42],providerInputTokens:35654,inputTokens:35654,cacheReadTokens:0};
+ const resumed=compactGeneration(postGen,[preGen,postGen],[{stepIndex:40,summaryTokens:2748}]);
+ assert.equal(resumed,postGen);
 });
