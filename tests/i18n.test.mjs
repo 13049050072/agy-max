@@ -25,6 +25,10 @@ test('native settings translations preserve product names and English input term
  assert.equal(t('Resets in 5d 1h','zh-CN'),'5 天 1 小时后重置');assert.equal(t('Resets in 3h 33m','zh-CN'),'3 小时 33 分钟后重置');
  assert.equal(t('Pull Requests','zh-CN'),'Pull Requests');assert.equal(t('14m ago','zh-CN'),'14m ago');
  assert.equal(t('Turbo','zh-CN'),'Turbo');assert.equal(t('当前会话','en'),'Current conversation');
+ assert.equal(t('Pinned','zh-CN'),'置顶');assert.equal(t('Pinned Conversations','zh-CN'),'置顶');
+ assert.equal(t('Pin Project','zh-CN'),'置顶项目');assert.equal(t('Unpin Project','zh-CN'),'取消置顶项目');
+ assert.equal(t('Pin Entire Project','zh-CN'),'置顶所属项目');
+ assert.equal(t('Show 3 More','zh-CN'),'展开显示');assert.equal(t('Show Less','zh-CN'),'收起');
 });
 
 test('Traditional Chinese (zh-TW) uses Taiwan IT terminology, converts UI strings cleanly, and persists in settings',()=>{

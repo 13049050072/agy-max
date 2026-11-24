@@ -536,6 +536,98 @@ test('setSidebarProjectLimit controls per-project visible rows, supports show-al
   assert.equal(context.VWc,nativeFlat);
 });
 
+test('setSidebarProjectPin enables Codex-style project pinning, orders loose pinned chats above pinned folders, and restores cleanly',()=>{
+  let pinnedIds=['proj-b'];
+  const togglePin=id=>{pinnedIds=pinnedIds.includes(id)?pinnedIds.filter(x=>x!==id):[...pinnedIds,id];};
+  const nativeSidebarItems=args=>{
+    const out=[];
+    const hasPinnedSection=(args.pinnedWorkspaces?.length||0)>0||(args.sortedPinnedIds?.length||0)>0;
+    if(hasPinnedSection){
+      out.push({type:'section-header',id:'section-pinned',title:'Pinned'});
+      for(const w of args.pinnedWorkspaces||[]){
+        out.push({type:'header',id:`header-${w.id}`,label:w.label,isCollapsed:false});
+        for(const it of w.items.slice(0,5))out.push({type:'row',id:it.cascadeId,cascadeId:it.cascadeId,isIndented:true,groupId:w.id,folderId:w.id});
+        if(w.items.length>5)out.push({type:'show-more',id:`show-more-${w.id}`,label:`Show ${w.items.length-5} More`,groupId:w.id,isIndented:true});
+      }
+      for(const cid of args.sortedPinnedIds||[]){
+        out.push({type:'row',id:cid,cascadeId:cid,isIndented:false,groupId:'pinned'});
+      }
+      out.push({type:'spacer',id:'spacer-section-pinned',height:16});
+    }
+    for(const g of args.groups||[]){
+      out.push({type:'header',id:`header-${g.id}`,label:g.label});
+      for(const it of g.items)out.push({type:'row',id:it.cascadeId,cascadeId:it.cascadeId,isIndented:true,groupId:g.id});
+    }
+    return out;
+  };
+  const nativeSidebarData=args=>{
+    const pSet=new Set(args.pinnedProjectIds||[]);
+    const pinnedWorkspaces=(args.groups||[]).filter(g=>pSet.has(g.id));
+    const groups=(args.groups||[]).filter(g=>!pSet.has(g.id));
+    const flatItems=context.VWc({groups,groupBy:'project',pinnedWorkspaces,sortedPinnedIds:['pin-chat-1','pin-chat-2'],onlyShowFirstFewConvos:{}});
+    return {groups,pinnedWorkspaces,flatItems,togglePagination:()=>{},onlyShowFirstFewConvos:{},visibleConversationGroupSectionIds:[]};
+  };
+  let renderedHeaderProps=null;
+  const nativeProjectHeader=props=>{renderedHeaderProps=props;return props;};
+  const context=vm.createContext({
+    document:{querySelector:()=>null},
+    __agyNativeBindings:{
+      names:{
+        resolve:'sjc',
+        segment:'Yyc',
+        menu:'lHc',
+        sidebarItems:'VWc',
+        sidebarData:'Bkd',
+        projectHeader:'Tld',
+        pinnedProjectsHook:'Uic',
+        togglePinProjectHook:'Wic',
+        pinnedWorkspaceOrderHook:'Ric'
+      }
+    },
+    VWc:nativeSidebarItems,
+    Bkd:nativeSidebarData,
+    Tld:nativeProjectHeader,
+    Uic:()=>[pinnedIds,()=>{}],
+    Wic:()=>togglePin,
+    Ric:()=>[{},()=>{}]
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js',import.meta.url),'utf8'),context);
+  const adapter=context.__agyNativeAdapter;
+  adapter.setSidebarProjectPin(true);
+
+  const allGroups=[
+    {id:'proj-a',label:'magpie',items:[{cascadeId:'a1'}]},
+    {id:'proj-b',label:'instabox管理工具',items:Array.from({length:7},(_,i)=>({cascadeId:`b${i}`}))}
+  ];
+  const res=context.Bkd({groups:allGroups,includePinnedSection:true,archivedOnly:false,pinnedProjectIds:[]});
+  // Pinned project moves out of unpinned groups into pinnedWorkspaces
+  assert.deepEqual(Array.from(res.groups,g=>g.id),['proj-a']);
+  assert.deepEqual(Array.from(res.pinnedWorkspaces,g=>g.id),['proj-b']);
+  // Codex order inside section-pinned: loose pinned chats FIRST, then pinned project folder + 5 rows + Show 2 More!
+  const pinnedSliceIds=Array.from(res.flatItems.slice(0,res.flatItems.findIndex(i=>i.id==='spacer-section-pinned')),i=>i.id);
+  assert.deepEqual(pinnedSliceIds,[
+    'section-pinned',
+    'pin-chat-1',
+    'pin-chat-2',
+    'header-proj-b',
+    'b0','b1','b2','b3','b4',
+    'show-more-proj-b'
+  ]);
+
+  // Project header receives isPinned and onTogglePin automatically, and clears unpinned drag onPointerDown
+  context.Tld({projectId:'proj-b',isPinned:false,onPointerDown:()=>{}});
+  assert.equal(renderedHeaderProps.isPinned,true);
+  assert.equal(renderedHeaderProps.onPointerDown,undefined);
+  assert.equal(typeof renderedHeaderProps.onTogglePin,'function');
+  renderedHeaderProps.onTogglePin('proj-b');
+  assert.deepEqual(pinnedIds,[]);
+
+  adapter.dispose();
+  assert.equal(context.VWc,nativeSidebarItems);
+  assert.equal(context.Bkd,nativeSidebarData);
+  assert.equal(context.Tld,nativeProjectHeader);
+});
+
 test('composerCascadeId resolves nearest conversationId or effectiveCascadeId for side-question and split-pane composers',()=>{
   const context=vm.createContext({document:{querySelector:()=>null}});
   vm.runInContext(readFileSync(new URL('../lib/native-client.js',import.meta.url),'utf8'),context);

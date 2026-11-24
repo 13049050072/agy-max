@@ -80,12 +80,28 @@ test('settings persist, merge safely, and reject unknown options without changin
     store.set({ sidebarProjectLimit: 3 }); assert.equal(store.get().sidebarProjectLimit, 3);
     store.set({ sidebarProjectLimit: -1 }); assert.equal(store.get().sidebarProjectLimit, -1);
     store.set({ sidebarProjectLimit: 0 });
-    assert.equal(store.get().priorityVisibleRows, 4);
+    assert.equal(store.get().priorityVisibleRows, 5);
+    assert.equal(store.get().priorityWindow, '24h');
+    assert.equal(store.get().priorityMaxItems, 5);
+    assert.equal(store.get().sidebarProjectPin, true);
     for (const rows of [3, 4, 5]) {
       store.set({ priorityVisibleRows: rows });
       assert.equal(createSettingsStore(directory).get().priorityVisibleRows, rows);
     }
+    for (const win of ['15m', '1h', '6h', '24h', '3d', '7d', 'all']) {
+      store.set({ priorityWindow: win });
+      assert.equal(createSettingsStore(directory).get().priorityWindow, win);
+    }
+    for (const max of [3, 5, 10, 20]) {
+      store.set({ priorityMaxItems: max });
+      assert.equal(createSettingsStore(directory).get().priorityMaxItems, max);
+    }
+    store.set({ sidebarProjectPin: false });
+    assert.equal(store.get().sidebarProjectPin, false);
+    store.set({ sidebarProjectPin: true });
     assert.throws(() => store.set({ priorityVisibleRows: 6 }), /设置/);
+    assert.throws(() => store.set({ priorityWindow: '2h' }), /设置/);
+    assert.throws(() => store.set({ priorityMaxItems: 7 }), /设置/);
     assert.equal(store.get().priorityVisibleRows, 5);
     assert.equal(DEFAULT_SETTINGS.overviewRange, 'weeklyQuota');
     assert.equal(store.get().overviewRange, 'weeklyQuota');

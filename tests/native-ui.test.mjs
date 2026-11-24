@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import vm from 'node:vm';
+import { createPriorityStore } from '../lib/priority.mjs';
 
 const source = readFileSync(new URL('../lib/native-ui.js', import.meta.url), 'utf8');
 
@@ -743,25 +746,35 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   assert.equal(focusList.props['data-testid'], 'agy-priority-list');
   assert.equal(focusList.props.tabIndex, 0);
   const rows = focusList.children[0];
-  assert.equal(rows.length, 12);
-  assert.equal(rows.at(-1).props['data-conversation-id'], 'run-extra-9');
+  // Default max items displayed in Priority is 5 (even when 12 sessions are running; bell still tracks all 12)
+  assert.equal(rows.length, 5);
+  assert.equal(rows.at(-1).props['data-conversation-id'], 'run-extra-2');
   const css = p.nodes.find(n => Object.hasOwn(n.dataset, 'agyDensityStyle')).textContent;
-  assert.match(css, /\.agy-priority-list\{[^}]*max-block-size:min\(calc\(var\(--agy-priority-visible-rows,4\) \* var\(--agy-priority-row-height\)\),36vh\);overflow-y:auto/);
-  assert.equal(focusList.props.style['--agy-priority-visible-rows'], 4);
-  for (const count of [3, 5]) {
+  assert.match(css, /\.agy-priority-list\{[^}]*max-block-size:min\(calc\(var\(--agy-priority-visible-rows,5\) \* var\(--agy-priority-row-height\)\),36vh\);overflow-y:auto/);
+  assert.equal(focusList.props.style['--agy-priority-visible-rows'], 5);
+  for (const count of [3, 4, 5]) {
     await capturedEnv.change({ priorityVisibleRows: count });
     const list = renderFocus().children[2];
     assert.equal(list.props.style['--agy-priority-visible-rows'], count);
-    assert.equal(list.children[0].length, 12);
+    assert.equal(list.children[0].length, 5);
   }
   const sliders = focusHeader.children[1];
   const icon = sliders.children[0];
   assert.equal(icon.type(icon.props).type, 'svg');
   sliders.props.onClick({ preventDefault() {}, stopPropagation() {} });
   const menu = renderFocus().children[1].children[2];
-  assert.equal(menu.children[0].props['data-testid'], 'agy-sidebar-next-running-btn');
-  assert.equal(menu.children[1].props['data-testid'], 'agy-priority-clear-read');
-  assert.equal(menu.children[1].props.disabled, true);
+  assert.equal(menu.children[0].props['data-testid'], 'agy-priority-window-group');
+  assert.equal(menu.children[1].props['data-testid'], 'agy-priority-max-group');
+  assert.equal(menu.children[3].props['data-testid'], 'agy-sidebar-next-running-btn');
+  assert.equal(menu.children[4].props['data-testid'], 'agy-priority-clear-read');
+  assert.equal(menu.children[4].props.disabled, true);
+  // Expanding max items via the Priority popover immediately shows up to 10 / 12 items
+  const max10Btn = menu.children[1].children[1].children.find(b => b.props['data-testid'] === 'agy-priority-max-10');
+  max10Btn.props.onClick();
+  assert.equal(renderFocus().children[2].children[0].length, 10);
+  const max20Btn = renderFocus().children[1].children[2].children[1].children[1].children.find(b => b.props['data-testid'] === 'agy-priority-max-20');
+  max20Btn.props.onClick();
+  assert.equal(renderFocus().children[2].children[0].length, 12);
 
   // Cmd+Opt+F triggers Session Search unless inside .xterm terminal
   const keyHandlers = p.callbacks.get('keydown') || [];
@@ -784,71 +797,116 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   p.context.__agyPowertools.dispose();
 });
 
-test('Priority view retains finished and read chats like Codex, sorts waiting/unread/active/idle, ages out after TTL, and clears read chats on demand', () => {
-  const p = page(true);
-  p.context.ReactDOM = { createRoot: () => ({ render() {}, unmount() {} }) };
-  p.context.document.hasFocus = () => true;
-  p.context.location.pathname = '/c/chat-focused';
-  const records = {
-    'chat-focused': { id: 'chat-focused', title: 'Focused task', projectName: 'proj1', running: true, unread: false, updatedAtMs: 1000 },
-    'chat-bg': { id: 'chat-bg', title: 'Background task', projectName: 'proj2', running: true, unread: false, updatedAtMs: 2000 },
-    'ordinary': { id: 'ordinary', title: 'Recently updated ordinary chat', running: false, unread: false, updatedAtMs: 1_699_999_999_999 }
-  };
-  p.context.__agyNativeAdapter = {
-    wrap: el => el,
-    installPage: () => true,
-    onEditChange: () => () => {},
-    onGoalDetected: () => () => {},
-    executionState: id => id === 'chat-bg' && records['chat-bg'].waiting ? { live: { waiting: true } } : null,
-    conversationDirectory: () => ({
-      running: Object.values(records).filter(r => r.running),
-      unread: Object.values(records).filter(r => r.unread),
-      byId: { ...records },
-      projects: [],
-      subagentIds: []
-    })
-  };
-  p.context.__agyInitialSettings = { enabled: true, sidebarFocusBell: true };
-  vm.runInContext(source, p.context);
-  const pt = p.context.__agyPowertools;
-  const t0 = 1_700_000_000_000;
+test('Priority view records conversations within selected past time window whether completed or not, defaults to max 5, and survives force-close reopen', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'agy-priority-test-'));
+  try {
+    const priorityStore = createPriorityStore(tmp);
+    const t0 = 1_700_000_000_000;
+    const records = {
+      'chat-focused': { id: 'chat-focused', title: 'Focused task', projectName: 'proj1', running: true, unread: false, updatedAtMs: t0 - 10_000 },
+      'chat-bg': { id: 'chat-bg', title: 'Background task', projectName: 'proj2', running: true, unread: false, updatedAtMs: t0 - 5_000 },
+      'done-recent': { id: 'done-recent', title: 'Completed 10m ago', projectName: 'proj1', running: false, unread: false, updatedAtMs: t0 - 10 * 60 * 1000 },
+      'done-2d': { id: 'done-2d', title: 'Completed 2d ago', projectName: 'proj3', running: false, unread: false, updatedAtMs: t0 - 2 * 24 * 3600 * 1000 }
+    };
 
-  // 1. Both running; chat-bg waiting on approval ranks above active
-  records['chat-bg'].waiting = true;
-  let snap = pt.syncPriorityItems({ now: t0, activeId: 'chat-focused', focused: true });
-  assert.deepEqual(Array.from(snap.items, i => `${i.id}:${i.attentionState}`), ['chat-bg:waiting', 'chat-focused:active']);
+    const bootSession = ({ initialPriority, emptySummaries = false, windowSetting = '15m' }) => {
+      const p = page(true);
+      p.context.ReactDOM = { createRoot: () => ({ render() {}, unmount() {} }) };
+      p.context.document.hasFocus = () => true;
+      p.context.location.pathname = '/c/chat-focused';
+      // Fresh empty localStorage simulating a brand-new random localhost port after Force Quit!
+      const memStorage = new Map();
+      p.context.localStorage = {
+        getItem: k => memStorage.get(k) ?? null,
+        setItem: (k, v) => memStorage.set(k, String(v))
+      };
+      p.context.__agyPowertoolsHost = raw => {
+        const req = JSON.parse(raw);
+        if (req.method === 'priority.save') {
+          const saved = priorityStore.save('local', { open: req.open, entries: req.entries });
+          queueMicrotask(() => p.context.__agyPowertoolsReceive?.(req.id, saved));
+        } else if (req.method === 'settings.get') {
+          queueMicrotask(() => p.context.__agyPowertoolsReceive?.(req.id, { enabled: true, sidebarFocusBell: true, priorityWindow: windowSetting, priorityMaxItems: 5 }));
+        }
+      };
+      p.context.__agyNativeAdapter = {
+        wrap: el => el,
+        installPage: () => true,
+        onEditChange: () => () => {},
+        onGoalDetected: () => () => {},
+        executionState: id => id === 'chat-bg' && records['chat-bg'].waiting ? { live: { waiting: true } } : null,
+        conversationDirectory: () => emptySummaries
+          ? { running: [], unread: [], byId: {}, projects: [], subagentIds: [] }
+          : {
+              running: Object.values(records).filter(r => r.running),
+              unread: Object.values(records).filter(r => r.unread),
+              byId: { ...records },
+              projects: [],
+              subagentIds: []
+            }
+      };
+      p.context.__agyInitialSettings = { enabled: true, sidebarFocusBell: true, priorityWindow: windowSetting, priorityMaxItems: 5 };
+      if (initialPriority) p.context.__agyInitialPriorityState = initialPriority;
+      vm.runInContext(source, p.context);
+      return p;
+    };
 
-  // 2. Both finish: focused chat becomes `idle` (retained!), background chat becomes `unread` (ranks above idle!)
-  records['chat-bg'].waiting = false;
-  records['chat-bg'].running = false;
-  records['chat-focused'].running = false;
-  snap = pt.syncPriorityItems({ now: t0 + 5000, activeId: 'chat-focused', focused: true });
-  assert.deepEqual(Array.from(snap.items, i => `${i.id}:${i.attentionState}`), ['chat-bg:unread', 'chat-focused:idle']);
+    // 1. With 15m window: running chats + completed chat from 10m ago ARE recorded; 2d-ago chat is excluded
+    records['chat-bg'].waiting = true;
+    const p1 = bootSession({ initialPriority: priorityStore.get('local'), windowSetting: '15m' });
+    const pt1 = p1.context.__agyPowertools;
+    let snap = pt1.syncPriorityItems({ now: t0, activeId: 'chat-focused', focused: true });
+    assert.deepEqual(
+      Array.from(snap.items, i => `${i.id}:${i.attentionState}`),
+      ['chat-bg:waiting', 'chat-focused:active', 'done-recent:idle']
+    );
 
-  // 3. Clicking chat-bg to read it transitions unread -> idle WITHOUT disappearing from Priority
-  p.context.location.pathname = '/c/chat-bg';
-  snap = pt.syncPriorityItems({ now: t0 + 10_000, activeId: 'chat-bg', focused: true });
-  assert.deepEqual(Array.from(snap.items, i => i.attentionState), ['idle', 'idle']);
-  assert.equal(snap.items.length, 2);
+    // 2. Simulate user opening Priority panel and Antigravity being FORCE-CLOSED (no dispose, port changes on reopen, summaries still loading at 0ms!)
+    priorityStore.save('local', { open: true });
+    records['chat-bg'].waiting = false;
+    records['chat-bg'].running = false;
+    records['chat-focused'].running = false;
 
-  // 4. After 15m TTL, chat-focused (finished at t0+5s) ages out while chat-bg (read at t0+10s) still has 3s left
-  snap = pt.syncPriorityItems({ now: t0 + 5000 + 15 * 60 * 1000 + 2000, activeId: 'other', focused: true });
-  assert.deepEqual(Array.from(snap.items, i => i.id), ['chat-bg']);
+    const pReopenBoot = bootSession({
+      initialPriority: priorityStore.get('local'),
+      emptySummaries: true,
+      windowSetting: '24h'
+    });
+    assert.equal(priorityStore.get('local').open, true);
+    const bootSnap = pReopenBoot.context.__agyPowertools.syncPriorityItems({ now: t0 + 3000, activeId: 'chat-focused', focused: true });
+    // Nothing is wiped on Force Quit reopen even before trajectorySummaries finishes loading!
+    assert.deepEqual(
+      Array.from(bootSnap.items, i => `${i.id}:${i.attentionState}`),
+      ['chat-bg:unread', 'chat-focused:idle', 'done-recent:idle']
+    );
+    pReopenBoot.context.__agyPowertools.dispose();
 
-  // 5. "Clear read chats" sweeps remaining idle items immediately
-  pt.clearReadPriorityChats(t0 + 5000 + 15 * 60 * 1000 + 3000);
-  snap = pt.syncPriorityItems({ now: t0 + 5000 + 15 * 60 * 1000 + 3000, activeId: 'other', focused: true });
-  assert.equal(snap.items.length, 0);
+    // 3. Selecting 3d window includes completed chats from 2 days ago as well
+    const p3d = bootSession({ initialPriority: priorityStore.get('local'), windowSetting: '3d' });
+    snap = p3d.context.__agyPowertools.syncPriorityItems({ now: t0 + 5000, activeId: 'chat-focused', focused: true });
+    assert.deepEqual(
+      Array.from(snap.items, i => `${i.id}:${i.attentionState}`),
+      ['chat-bg:unread', 'chat-focused:idle', 'done-recent:idle', 'done-2d:idle']
+    );
 
-  // Clearing a read chat only suppresses the old update, not its next run.
-  records['chat-bg'].running = true;
-  snap = pt.syncPriorityItems({ now: t0 + 5000 + 15 * 60 * 1000 + 4000, activeId: 'other' });
-  assert.deepEqual(Array.from(snap.items, i => i.id), ['chat-bg']);
-  records['chat-bg'].archived = true;
-  snap = pt.syncPriorityItems({ now: t0 + 5000 + 15 * 60 * 1000 + 5000, activeId: 'other' });
-  assert.equal(snap.items.length, 0);
+    // 4. Reading chat-bg turns it idle; "Clear read chats" sweeps all idle items in one click
+    p3d.context.location.pathname = '/c/chat-bg';
+    snap = p3d.context.__agyPowertools.syncPriorityItems({ now: t0 + 10_000, activeId: 'chat-bg', focused: true });
+    assert.equal(snap.items.every(i => i.attentionState === 'idle'), true);
+    p3d.context.__agyPowertools.clearReadPriorityChats(t0 + 11_000);
+    snap = p3d.context.__agyPowertools.syncPriorityItems({ now: t0 + 11_000, activeId: 'other', focused: true });
+    assert.equal(snap.items.length, 0);
 
-  pt.dispose();
+    // 5. Next run of a cleared chat still brings it back immediately
+    records['chat-bg'].running = true;
+    snap = p3d.context.__agyPowertools.syncPriorityItems({ now: t0 + 12_000, activeId: 'other', focused: true });
+    assert.deepEqual(Array.from(snap.items, i => i.id), ['chat-bg']);
+
+    pt1.dispose();
+    p3d.context.__agyPowertools.dispose();
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('composer under-card status strip mounts outside .surface-composer-card after card and renders Git + telemetry cleanly', async () => {
