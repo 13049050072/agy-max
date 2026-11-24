@@ -70,6 +70,7 @@ test('loopback HTTP 206 Range streaming, token/Host/Origin/Sec-Fetch-Site guards
     assert.equal(full.status, 200);
     assert.equal(full.headers['accept-ranges'], 'bytes');
     assert.equal(full.headers['content-type'], 'video/mp4');
+    assert.equal(full.headers['content-security-policy'], "default-src 'none'; sandbox");
     assert.equal(full.body.toString('utf8'), payload.toString('utf8'));
 
     // 206 Range start-end
@@ -127,12 +128,31 @@ test('loopback HTTP 206 Range streaming, token/Host/Origin/Sec-Fetch-Site guards
     assert.equal(htmlRes.status, 200);
     assert.equal(
       htmlRes.headers['content-security-policy'],
-      "default-src 'self' data: blob: 'unsafe-inline'; connect-src 'none'"
+      "default-src 'self' data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'"
     );
 
-    // Attempting to use HTML's scoped token against clip.mp4 is blocked
+    // Attempting to use HTML's scoped token against clip.mp4 is blocked, and vice versa
     const crossFileAttempt = await rawHttpRequest(`${noTokenUrl}?token=${htmlToken}`);
     assert.equal(crossFileAttempt.status, 403);
+    const htmlNoTokenUrl = htmlOpened.url.split('?')[0];
+    const reverseCrossAttempt = await rawHttpRequest(`${htmlNoTokenUrl}?token=${videoToken}`);
+    assert.equal(reverseCrossAttempt.status, 403);
+
+    // XML files are served as text/plain with sandbox CSP and an isolated per-file scoped token
+    const xmlFile = join(dir, 'payload.xml');
+    writeFileSync(xmlFile, '<x xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></x>');
+    const xmlOpened = await gateway.open({ uriOrPath: xmlFile });
+    assert.equal(xmlOpened.kind, 'code');
+    assert.equal(xmlOpened.mime, 'text/plain; charset=utf-8');
+    const xmlToken = new URL(xmlOpened.url).searchParams.get('token');
+    assert.notEqual(xmlToken, videoToken);
+    assert.notEqual(xmlToken, htmlToken);
+    const xmlRes = await rawHttpRequest(xmlOpened.url);
+    assert.equal(xmlRes.status, 200);
+    assert.equal(xmlRes.headers['content-type'], 'text/plain; charset=utf-8');
+    assert.equal(xmlRes.headers['x-content-type-options'], 'nosniff');
+    assert.equal(xmlRes.headers['content-security-policy'], "default-src 'none'; sandbox");
+    assert.equal((await rawHttpRequest(`${noTokenUrl}?token=${xmlToken}`)).status, 403);
 
     // Verify classification of all remaining kinds (audio, pdf, image, svg, table, font, code, binary)
     const sampleKinds = [
@@ -143,6 +163,7 @@ test('loopback HTTP 206 Range streaming, token/Host/Origin/Sec-Fetch-Site guards
       ['data.csv', 'table', 'text/csv; charset=utf-8'],
       ['type.woff2', 'font', 'font/woff2'],
       ['index.ts', 'code', 'text/plain; charset=utf-8'],
+      ['feed.xml', 'code', 'text/plain; charset=utf-8'],
       ['blob.bin', 'binary', 'application/octet-stream']
     ];
     for (const [fname, expectedKind, expectedMime] of sampleKinds) {
@@ -151,6 +172,12 @@ test('loopback HTTP 206 Range streaming, token/Host/Origin/Sec-Fetch-Site guards
       const res = await gateway.open({ uriOrPath: fpath });
       assert.equal(res.kind, expectedKind);
       assert.equal(res.mime, expectedMime);
+      if (expectedKind === 'pdf') {
+        const pdfRes = await rawHttpRequest(res.url);
+        assert.equal(pdfRes.status, 200);
+        assert.ok(pdfRes.headers['content-security-policy']?.includes("object-src 'self'"));
+        assert.equal(pdfRes.headers['content-security-policy']?.includes('sandbox'), false, 'PDF stream CSP must not set sandbox directive that blocks Chromium PDFium');
+      }
     }
 
     // TOCTOU symlink swap after open() is rejected at stream time
@@ -175,15 +202,27 @@ test('path security blocks UNC, Windows device paths, traversal, sensitive crede
   const sshDir = join(fakeHome, '.ssh');
   const awsDir = join(fakeHome, '.aws');
   const pluginDataDir = join(fakeHome, '.gemini', 'antigravity', 'plugin_data', 'agy-powertools');
+  const agyMaxDataDir = join(fakeHome, '.gemini', 'antigravity', 'plugin_data', 'agy-max');
+  const agyMaxRuntimeDir = join(agyMaxDataDir, 'runtime');
+  const dockerDir = join(fakeHome, '.docker');
   const pluginCfgDir = join(fakeHome, '.gemini', 'config', 'plugins', 'demo');
   mkdirSync(sshDir, { recursive: true });
   mkdirSync(awsDir, { recursive: true });
   mkdirSync(pluginDataDir, { recursive: true });
+  mkdirSync(agyMaxRuntimeDir, { recursive: true });
+  mkdirSync(dockerDir, { recursive: true });
   mkdirSync(pluginCfgDir, { recursive: true });
 
   const sshKey = join(sshDir, 'id_ed25519');
   const awsCreds = join(awsDir, 'credentials');
   const accountsFile = join(pluginDataDir, 'accounts.json');
+  const legacySettingsFile = join(pluginDataDir, 'settings.json');
+  const agyMaxRuntimeToken = join(agyMaxRuntimeDir, 'host.json');
+  const agyMaxSettingsFile = join(agyMaxDataDir, 'settings.json');
+  const netrcFile = join(fakeHome, '.netrc');
+  const npmrcFile = join(fakeHome, '.npmrc');
+  const pypircFile = join(fakeHome, '.pypirc');
+  const dockerConfigFile = join(dockerDir, 'config.json');
   const thoughtProfiles = join(pluginCfgDir, 'thought-profiles.json');
   const dotEnv = join(dir, '.env');
   const pemFile = join(dir, 'server.pem');
@@ -191,7 +230,10 @@ test('path security blocks UNC, Windows device paths, traversal, sensitive crede
   const credFile = join(dir, 'gcp-credential-prod.json');
   const safeFile = join(dir, 'notes.txt');
 
-  for (const f of [sshKey, awsCreds, accountsFile, thoughtProfiles, dotEnv, pemFile, keyFile, credFile, safeFile]) {
+  for (const f of [
+    sshKey, awsCreds, accountsFile, legacySettingsFile, agyMaxRuntimeToken, agyMaxSettingsFile,
+    netrcFile, npmrcFile, pypircFile, dockerConfigFile, thoughtProfiles, dotEnv, pemFile, keyFile, credFile, safeFile
+  ]) {
     writeFileSync(f, 'content');
   }
 
@@ -215,6 +257,13 @@ test('path security blocks UNC, Windows device paths, traversal, sensitive crede
       sshKey,
       awsCreds,
       accountsFile,
+      legacySettingsFile,
+      agyMaxRuntimeToken,
+      agyMaxSettingsFile,
+      netrcFile,
+      npmrcFile,
+      pypircFile,
+      dockerConfigFile,
       thoughtProfiles,
       dotEnv,
       pemFile,

@@ -166,8 +166,60 @@ test('Prism RPC scopes the diff and keeps unfinished or consent-sensitive capabi
     await req('chatFolders.save', { folders: [{ id: 'daily', name: 'Daily' }], assignments: { c1: 'daily' } });
     assert.equal((await req('chatFolders.get')).assignments.c1, 'daily');
     const { bundle } = await req('settings.export');
-    assert.equal('multiAccount' in bundle.settings, false);
-    assert.deepEqual((await req('settings.import', { bundle: { settings: { themePalette: 'warm', autoSwitchAccount: true } } })).patch, { themePalette: 'warm' });
+    for (const blocked of [
+      'enabled', 'agyFast', 'multiAccount', 'autoSwitchAccount',
+      'accountSwitcher', 'accountViewMode', 'accountQuotaWindow',
+      'proxyEnabled', 'proxyUrl', 'proxyBypass', 'proxyForceHttp1',
+      'sshCommandPaste', 'fileContextMenu', 'externalEditor',
+      'thoughtTranslate', 'thoughtTrigger', 'thoughtView', 'thoughtStyle',
+      'thoughtCustomPrompt', 'translateSessionTitles',
+      'contextLimit', 'stageUpdates', 'efficientIO', 'pragmaticCoding'
+    ]) {
+      assert.equal(blocked in bundle.settings, false, `settings.export must omit ${blocked}`);
+    }
+    assert.equal(bundle.settings.themePalette, 'native');
+    assert.equal(bundle.settings.compact, true);
+    assert.equal(bundle.settings.priorityWindow, '24h');
+    assert.equal(bundle.settings.priorityMaxItems, 5);
+    assert.equal(bundle.settings.sidebarProjectPin, true);
+    assert.deepEqual((await req('settings.import', {
+      bundle: {
+        settings: {
+          themePalette: 'warm',
+          motionLevel: 'subtle',
+          priorityWindow: '7d',
+          sidebarProjectPin: false,
+          enabled: false,
+          agyFast: false,
+          multiAccount: true,
+          autoSwitchAccount: true,
+          proxyEnabled: true,
+          proxyUrl: 'http://attacker.invalid:8080',
+          proxyBypass: 'none',
+          proxyForceHttp1: true,
+          sshCommandPaste: false,
+          fileContextMenu: false,
+          externalEditor: 'vscode',
+          thoughtTranslate: 'ai',
+          translateSessionTitles: true,
+          thoughtCustomPrompt: 'exfiltrate',
+          contextLimit: 256000
+        }
+      }
+    })).patch, { themePalette: 'warm', motionLevel: 'subtle', priorityWindow: '7d', sidebarProjectPin: false });
+    await assert.rejects(
+      req('settings.import', {
+        bundle: {
+          settings: {
+            enabled: false,
+            agyFast: false,
+            proxyEnabled: true,
+            proxyUrl: 'http://attacker.invalid:8080'
+          }
+        }
+      }),
+      /没有可以导入的设置/
+    );
     assert.equal(settings.get().themePalette, 'native'); // Let the UI apply validated settings through its existing lifecycle.
     await assert.rejects(req('diff.inline', { conversationId: 'missing', workspaceUri: pathToFileURL(root).href, path: 'main.txt' }), /工作区/);
     await assert.rejects(req('diff.inline', { conversationId: 'c1', path: 'main.txt' }, { remoteWindow: true }), /不支持/);
