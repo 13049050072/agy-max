@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {createServer} from 'node:http';
+import {spawn} from 'node:child_process';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {startNativeIntegration,declaredNativeNames,isSwarmTarget,swarmI18nSource} from '../lib/native-host.mjs';
 
 test('same window reattaches after an updater changes the origin or debug endpoint',async()=>{
@@ -259,6 +262,65 @@ test('native-host unpacks isolated RPC envelopes without id/method collision and
   } finally {
     await stop?.();
     globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('startNativeIntegration local CDP /json/list bypasses NODE_USE_ENV_PROXY and HTTP_PROXY', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-cdp-proxy-'));
+  const portFile = join(dir, 'DevToolsActivePort');
+  let cdpHits = 0, proxyHits = 0;
+  const cdpServer = createServer((req, res) => {
+    if (req.url === '/json/list') {
+      cdpHits++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('[]');
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  const proxyServer = createServer((req, res) => {
+    proxyHits++;
+    res.writeHead(502);
+    res.end('proxy trap');
+  });
+  try {
+    await new Promise(r => cdpServer.listen(0, '127.0.0.1', r));
+    await new Promise(r => proxyServer.listen(0, '127.0.0.1', r));
+    writeFileSync(portFile, `${cdpServer.address().port}\n/devtools/browser/test\n`, 'utf8');
+    const modUrl = pathToFileURL(resolve('lib/native-host.mjs')).href;
+    const script = `import { startNativeIntegration } from ${JSON.stringify(modUrl)};
+      let ready = false;
+      const stop = startNativeIntegration({
+        portFile: ${JSON.stringify(portFile)},
+        parseSessionData: () => ({}),
+        onStatus: () => {},
+        onDebugPortReady: () => { ready = true; }
+      });
+      await stop.ready;
+      await stop();
+      if (!ready) throw new Error('debug port not reached');`;
+    await new Promise((resolveDone, reject) => {
+      const env = {
+        ...process.env,
+        NODE_USE_ENV_PROXY: '1',
+        HTTP_PROXY: `http://127.0.0.1:${proxyServer.address().port}`,
+        http_proxy: `http://127.0.0.1:${proxyServer.address().port}`
+      };
+      delete env.NO_PROXY;
+      delete env.no_proxy;
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', c => { stderr += c; });
+      child.once('error', reject);
+      child.once('exit', code => code === 0 ? resolveDone() : reject(new Error(stderr || `exit ${code}`)));
+    });
+    assert.equal(proxyHits, 0, 'local CDP discovery must never traverse HTTP_PROXY');
+    assert.equal(cdpHits, 1);
+  } finally {
+    await new Promise(r => cdpServer.close(r));
+    await new Promise(r => proxyServer.close(r));
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,readdirSync,rmSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,readdirSync,rmSync,symlinkSync,utimesSync} from 'node:fs';
+import {createServer} from 'node:http';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {collectPackage,writePackage,encodePackage,decodePackage,validatePackage,sha256,releaseName} from '../lib/package.mjs';
-import {installationPaths,installPlugin,uninstallPlugin,atomicJson,assertOwnedPath} from '../lib/lifecycle.mjs';
-import {runUpdateJob,updateStatus,startUpdate} from '../lib/update-manager.mjs';
+import {installationPaths,installPlugin,uninstallPlugin,atomicJson,assertOwnedPath,acquireLockFile,releaseLockFile} from '../lib/lifecycle.mjs';
+import {runUpdateJob,updateStatus,startUpdate,mergeLoopbackNoProxy} from '../lib/update-manager.mjs';
 import {serveRuntime,stopRuntimes,waitForRuntime,runtimeRecords} from '../lib/runtime-control.mjs';
 
 const original=collectPackage(resolve('.')),stop=async()=>{};
@@ -207,5 +208,80 @@ test('dangling symlinks cannot bypass assertOwnedPath or assertTree during insta
     symlinkSync(externalMissing,join(s.paths.installed,'dangling-entry'),linkType);
     await assert.rejects(()=>uninstallPlugin({home:s.home,stop}),/符号链接/);
     assert.equal(existsSync(externalMissing),false);
+  }finally{s.clean();}
+});
+
+test('runtime control loopback requests bypass NODE_USE_ENV_PROXY and HTTP_PROXY',async()=>{
+  const s=sandbox();let close,stopped=false,proxyHits=0;
+  const proxyServer=createServer((req,res)=>{proxyHits++;res.writeHead(502);res.end('proxy trap');});
+  try{
+    await new Promise(resolve=>proxyServer.listen(0,'127.0.0.1',resolve));
+    const proxyPort=proxyServer.address().port;
+    const directory=join(s.paths.data,'runtime');
+    close=await serveRuntime({directory,version:original.version,stop:async()=>{stopped=true;},health:async()=>({healthy:true}),exit:()=>{}});
+    const modUrl=pathToFileURL(resolve('lib/runtime-control.mjs')).href;
+    const script=`import {waitForRuntime,stopRuntimes} from ${JSON.stringify(modUrl)};
+      const st=await waitForRuntime(${JSON.stringify(directory)},${JSON.stringify(original.version)},{timeout:3000});
+      if(!st.healthy)throw Error('unhealthy');
+      await stopRuntimes(${JSON.stringify(directory)},{purge:false});`;
+    await new Promise((resolveDone,reject)=>{
+      const env={...process.env,NODE_USE_ENV_PROXY:'1',HTTP_PROXY:`http://127.0.0.1:${proxyPort}`,http_proxy:`http://127.0.0.1:${proxyPort}`};
+      delete env.NO_PROXY;delete env.no_proxy;
+      const child=spawn(process.execPath,['--input-type=module','-e',script],{env,stdio:['ignore','pipe','pipe']});
+      let stderr='';child.stderr.on('data',c=>{stderr+=c;});
+      child.once('error',reject);
+      child.once('exit',code=>code===0?resolveDone():reject(Error(stderr||`exit ${code}`)));
+    });
+    assert.equal(proxyHits,0,'loopback runtime control must never traverse HTTP_PROXY');
+    assert.equal(stopped,true);
+    assert.equal(runtimeRecords(directory).length,0);
+  }finally{await close?.();await new Promise(r=>proxyServer.close(r));s.clean();}
+});
+
+test('mergeLoopbackNoProxy always appends localhost, 127.0.0.1, and ::1 while keeping existing entries',()=>{
+  const empty=mergeLoopbackNoProxy({});
+  assert.equal(empty.NO_PROXY,'localhost,127.0.0.1,::1');
+  assert.equal(empty.no_proxy,'localhost,127.0.0.1,::1');
+  const merged=mergeLoopbackNoProxy({NO_PROXY:'internal.corp, LOCALHOST',No_Proxy:'.example.com,127.0.0.1'});
+  assert.equal(merged.NO_PROXY,'internal.corp,LOCALHOST,.example.com,127.0.0.1,::1');
+  assert.equal(merged.no_proxy,merged.NO_PROXY);
+  assert.equal(Object.hasOwn(merged,'No_Proxy'),false);
+});
+
+test('maintenance.lock and update.lock recover from corrupt files and invalid PIDs without deadlocking',async()=>{
+  const s=sandbox();
+  try{
+    mkdirSync(s.paths.data,{recursive:true});
+    const mLock=join(s.paths.data,'maintenance.lock');
+    const uLock=join(s.paths.data,'update.lock');
+    const past=new Date(Date.now()-5000);
+
+    // Invalid PIDs (0, -1, non-integer, missing) are replaced immediately
+    for(const payload of ['{"pid":0,"nonce":"n1"}','{"pid":-5,"nonce":"n2"}','{"pid":"abc","nonce":"n3"}','{}','null']){
+      writeFileSync(mLock,payload);
+      const nonce=acquireLockFile(mLock,{busyMessage:'busy'});
+      assert.equal(JSON.parse(readFileSync(mLock,'utf8')).pid,process.pid);
+      releaseLockFile(mLock,nonce);
+      assert.equal(existsSync(mLock),false);
+    }
+
+    // Fresh empty/truncated lock file within grace period is treated as busy
+    writeFileSync(mLock,'');
+    assert.throws(()=>acquireLockFile(mLock,{busyMessage:'busy',corruptGraceMs:2000}),/busy/);
+
+    // Truncated/empty lock file older than grace period is recovered cleanly by installPlugin & startUpdate
+    writeFileSync(mLock,'{"pid":');
+    utimesSync(mLock,past,past);
+    const res=await installPlugin({bundle:older,home:s.home,stop});
+    assert.equal(res.version,older.version);
+    assert.equal(existsSync(mLock),false);
+
+    writeFileSync(uLock,'');
+    utimesSync(uLock,past,past);
+    const bytes=encodePackage(newer),name=releaseName(newer.version);
+    const fetcher=async()=>new Response(JSON.stringify({tag_name:'v'+newer.version,assets:[{name,state:'uploaded',digest:'sha256:'+sha256(bytes)}]}));
+    const started=await startUpdate({home:s.home,currentVersion:older.version,expectedVersion:newer.version,project:{githubUrl:'https://github.com/test/project'},fetcher,launch:async()=>process.pid});
+    assert.equal(started.status,'preparing');
+    assert.equal(JSON.parse(readFileSync(uLock,'utf8')).pid,process.pid);
   }finally{s.clean();}
 });
