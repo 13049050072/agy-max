@@ -84,7 +84,7 @@ test('local wallpaper only accepts chosen media and releases previous object URL
 });
 
 test('Prism RPC scopes the diff and keeps unfinished or consent-sensitive capabilities out of the renderer', async () => {
-  const temp = realpathSync(mkdtempSync(join(tmpdir(), 'agy-prism-integration-')));
+  const temp = (realpathSync.native || realpathSync)(mkdtempSync(join(tmpdir(), 'agy-prism-integration-')));
   const root = join(temp, 'project');
   const git = (args, cwd = root) => execFileSync('git', args, { cwd, stdio: 'pipe' });
   try {
