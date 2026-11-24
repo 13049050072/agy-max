@@ -58,6 +58,66 @@ test('renderer integration never enables unconnected services and preserves draf
   assert.deepEqual(calls.slice(-2).map(([key]) => key), ['workbench.dispose', 'optics.dispose']);
 });
 
+test('vialProps aggregates category breakdowns by both database.mjs row.label and legacy row.key', () => {
+  const context = vm.createContext({
+    location: { pathname: '/c/c1' },
+    __agyCreateOptics: () => ({ sync() {}, dispose() {} }),
+    __agyCreateWorkbench: () => ({ sync() {}, dispose() {} })
+  });
+  vm.runInContext(readFileSync(new URL('../lib/prism-integration.js', import.meta.url), 'utf8'), context);
+  const integration = context.__agyCreatePrismIntegration({
+    options: () => ({ enabled: true }),
+    adapter: {},
+    notify() {},
+    uiText: (zh, en) => en
+  });
+
+  // Real database.mjs / context.mjs output where keys are group-0, group-1, ...
+  const realVial = integration.vialProps({
+    conversationId: 'c1',
+    contextWindow: {
+      usedTokens: 65000,
+      maxTokens: 200000,
+      usedPercent: 32.5,
+      categories: [
+        { key: 'group-0', label: 'System Prompt', tokens: 5000, tone: 'active' },
+        { key: 'skills', label: 'Skills', tokens: 1200, tone: 'active' },
+        { key: 'group-1', label: 'Rules', tokens: 800, tone: 'active' },
+        { key: 'group-2', label: 'Memories', tokens: 500, tone: 'active' },
+        { key: 'group-3', label: 'Chat Messages', tokens: 40000, tone: 'active' },
+        { key: 'group-4', label: 'Tools', tokens: 12000, tone: 'active' },
+        { key: 'group-5', label: 'MCP Tools', tokens: 3000, tone: 'active' },
+        { key: 'group-6', label: 'Plugins', tokens: 1500, tone: 'active' },
+        { key: 'group-7', label: 'Subagents', tokens: 1000, tone: 'active' },
+        { key: 'free', label: '剩余空间', tokens: 135000, tone: 'free' }
+      ]
+    },
+    telemetry: { latestTps: 45, avgTtftMs: 320 }
+  });
+  assert.equal(realVial.systemTokens, 7500);
+  assert.equal(realVial.messageTokens, 40000);
+  assert.equal(realVial.toolTokens, 17500);
+
+  // Fallback context.mjs input row and legacy key-only rows
+  const fallbackVial = integration.vialProps({
+    conversationId: 'c2',
+    contextWindow: {
+      usedTokens: 18000,
+      maxTokens: 100000,
+      usedPercent: 18,
+      categories: [
+        { key: 'system', label: '', tokens: 2000 },
+        { key: 'input', label: '输入上下文', tokens: 15000 },
+        { key: 'tool', label: '', tokens: 1000 }
+      ]
+    }
+  });
+  assert.equal(fallbackVial.systemTokens, 2000);
+  assert.equal(fallbackVial.messageTokens, 15000);
+  assert.equal(fallbackVial.toolTokens, 1000);
+  integration.dispose();
+});
+
 test('local wallpaper only accepts chosen media and releases previous object URLs', () => {
   const images = [];
   const revoked = [];

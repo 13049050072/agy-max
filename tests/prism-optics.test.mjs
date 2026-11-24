@@ -499,9 +499,13 @@ function createMockEnv({ pathname = '/', dark = true, reducedMotion = false } = 
     constructor(...ranges) { this.ranges = ranges; }
   }
 
+  const observeCalls = [];
   class MockMutationObserver {
     constructor(callback) { this.callback = callback; }
-    observe() { observers.add(this); }
+    observe(target, options) {
+      observeCalls.push({ observer: this, target, options });
+      observers.add(this);
+    }
     disconnect() { observers.delete(this); }
   }
 
@@ -579,6 +583,7 @@ function createMockEnv({ pathname = '/', dark = true, reducedMotion = false } = 
     document,
     window: windowObj,
     highlights,
+    observeCalls,
     rafQueue,
     timers,
     docListeners,
@@ -1170,4 +1175,76 @@ test('standalone mountPopoverVial, hidden peek deference, image wallpaper, and t
   assert.ok(vp.scrollTop > afterFirst);
 
   optics.dispose();
+});
+
+test('MutationObserver isolates subtree:false attributes on body/documentElement and prunes detached DOM references', () => {
+  const m = createMockEnv({ dark: true });
+  const nav = m.document.createElement('nav');
+  nav.setAttribute('data-testid', 'sidebar-navigation-items');
+  const autoLink = m.document.createElement('a');
+  autoLink.setAttribute('href', '/automations');
+  nav.appendChild(autoLink);
+
+  const card = m.document.createElement('div');
+  card.className = 'surface-composer-card';
+  const textarea = m.document.createElement('textarea');
+  textarea.setAttribute('placeholder', 'Original');
+  card.appendChild(textarea);
+
+  const childBtn = m.document.createElement('button');
+  childBtn.className = 'idle';
+  m.document.body.append(nav, card, childBtn);
+
+  const optics = m.context.__agyCreateOptics({
+    options: () => ({
+      enabled: true,
+      themePalette: 'obsidian',
+      sidebarNavFold: true,
+      placeholderStyle: 'studio'
+    }),
+    uiText: (zh, en) => en
+  });
+
+  // Verify observer configuration: subtree observer does not watch attributes; attrObserver uses subtree: false
+  const bodySubtreeCall = m.observeCalls.find(c => c.target === m.document.body && c.options?.subtree === true);
+  assert.ok(bodySubtreeCall, 'Expected subtree childList/characterData observer on body');
+  assert.equal(Boolean(bodySubtreeCall.options.attributes), false, 'Subtree observer must not observe attributes');
+
+  const bodyAttrCall = m.observeCalls.find(c => c.target === m.document.body && c.options?.attributes === true);
+  assert.ok(bodyAttrCall, 'Expected direct attribute observer on body');
+  assert.equal(bodyAttrCall.options.subtree, false);
+  assert.deepEqual(Array.from(bodyAttrCall.options.attributeFilter), ['data-has-browser-hole', 'class']);
+
+  const htmlAttrCall = m.observeCalls.find(c => c.target === m.document.documentElement && c.options?.attributes === true);
+  assert.ok(htmlAttrCall, 'Expected direct attribute observer on documentElement');
+  assert.equal(htmlAttrCall.options.subtree, false);
+
+  // Descendant class toggle must NOT trigger syncStylesAndTokens()
+  let rootAttrWrites = 0;
+  const origSetAttr = m.document.documentElement.setAttribute.bind(m.document.documentElement);
+  m.document.documentElement.setAttribute = (name, val) => {
+    if (name === 'data-agy-optics-palette') rootAttrWrites++;
+    return origSetAttr(name, val);
+  };
+  childBtn.className = 'hover active';
+  assert.equal(rootAttrWrites, 0, 'Descendant class changes must not re-run syncStylesAndTokens');
+
+  // Toggling class on documentElement DOES re-sync dark/light mode
+  m.document.documentElement.classList.remove('dark');
+  m.document.documentElement.classList.add('light');
+  assert.equal(optics.getDebugState().isDark, false);
+
+  // Detached elements are pruned from foldedNodes and originalPlaceholders on sync()
+  assert.equal(autoLink.getAttribute('data-agy-nav-folded'), 'true');
+  assert.equal(textarea.getAttribute('placeholder'), 'Describe a task, @ for context, / for commands');
+  autoLink.remove();
+  textarea.remove();
+  optics.sync();
+  optics.dispose();
+  // Since both were pruned while disconnected, dispose() did not touch the detached nodes
+  assert.equal(autoLink.getAttribute('data-agy-nav-folded'), 'true');
+  assert.equal(textarea.getAttribute('placeholder'), 'Describe a task, @ for context, / for commands');
+
+  // trackedTextNodes uses WeakMap (no strong retention of detached text nodes)
+  assert.match(opticsSource, /trackedTextNodes\s*=\s*new WeakMap\(\)/);
 });
