@@ -162,3 +162,103 @@ test('isSwarmTarget and startNativeIntegration localize Swarm plugin iframes and
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('native-host unpacks isolated RPC envelopes without id/method collision and replies to integer rpcId', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-rpc-envelope-'));
+  const portFile = join(dir, 'port');
+  writeFileSync(portFile, '12345\n');
+  const originalFetch = globalThis.fetch;
+  const listeners = new Set();
+  const replies = [];
+  const parseCalls = [];
+  globalThis.fetch = async () => ({
+    json: async () => [
+      { id: 'win-1', type: 'page', title: 'Local - Antigravity', url: 'https://127.0.0.1:5005/c/a', webSocketDebuggerUrl: 'ws://127.0.0.1:12345/devtools/page/win-1' }
+    ]
+  });
+  let stop;
+  try {
+    stop = startNativeIntegration({
+      portFile,
+      parseSessionData: id => { parseCalls.push(id); return { conversationId: id, requests: [], turns: [] }; },
+      onStatus: () => {},
+      discover: async () => [],
+      connect: async () => ({
+        onEvent: fn => listeners.add(fn),
+        socket: { addEventListener() {}, close() {} },
+        async send(method, params) {
+          if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'main-frame' } } };
+          if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'script-1' };
+          if (method === 'Runtime.evaluate') {
+            const expr = String(params?.expression || '');
+            if (expr.includes('navigator.userAgent')) {
+              return { result: { value: { ua: 'Mozilla/5.0 Antigravity/2.35.0', isHub: true, sshKind: '', sshHost: '', title: 'Local - Antigravity' } } };
+            }
+            const match = expr.match(/globalThis\.__agyPowertoolsReceive\?\.\((\d+),([\s\S]+)\)$/);
+            if (match) replies.push({ rpcId: Number(match[1]), reply: JSON.parse(match[2]) });
+            return { result: { value: true } };
+          }
+          return {};
+        }
+      })
+    });
+    await stop.ready;
+    const emit = async evt => { for (const fn of listeners) await fn(evt); };
+    await emit({
+      method: 'Runtime.executionContextCreated',
+      params: { context: { id: 7, origin: 'https://127.0.0.1:5005', auxData: { isDefault: true, frameId: 'main-frame' } } }
+    });
+
+    // Isolated envelope with payload.id and payload.method must NOT overwrite integer rpcId or rpcMethod
+    await emit({
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: '__agyPowertoolsHost',
+        executionContextId: 7,
+        payload: JSON.stringify({
+          id: 41,
+          method: 'state',
+          payload: { id: 'prof_collision', method: 'FAKE', conversationId: 'conv-isolated' }
+        })
+      }
+    });
+    assert.deepEqual(parseCalls, ['conv-isolated']);
+    const r41 = replies.find(r => r.rpcId === 41);
+    assert.ok(r41);
+    assert.equal(r41.reply.conversationId, 'conv-isolated');
+
+    // Domain id like thought.profiles.delete({ id: 'prof_abc' }) must still receive a response on integer rpcId (not silently dropped)
+    await emit({
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: '__agyPowertoolsHost',
+        executionContextId: 7,
+        payload: JSON.stringify({
+          id: 42,
+          method: 'thought.profiles.delete',
+          payload: { id: 'prof_abc' }
+        })
+      }
+    });
+    const r42 = replies.find(r => r.rpcId === 42);
+    assert.ok(r42);
+    assert.equal(typeof r42.reply.error, 'string');
+
+    // Backwards compatibility: flat envelope still works
+    await emit({
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: '__agyPowertoolsHost',
+        executionContextId: 7,
+        payload: JSON.stringify({ id: 43, method: 'settings.get' })
+      }
+    });
+    const r43 = replies.find(r => r.rpcId === 43);
+    assert.ok(r43);
+    assert.equal(typeof r43.reply.enabled, 'boolean');
+  } finally {
+    await stop?.();
+    globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

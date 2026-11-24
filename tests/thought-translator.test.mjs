@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import net from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createThoughtTranslator,
+  fetchViaProxy,
   isLocalOrLanHost,
   isPrimarilyCjk,
   maskApiKey,
+  MAX_PROXY_RESPONSE_BYTES,
   validateUpstreamUrl
 } from '../lib/thought-translator.mjs';
 
@@ -496,6 +500,97 @@ test('diagnose reports masked proxy status, latency, and handles upstream failur
     assert.equal(emptyRes.translated, '');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('fetchViaProxy handles pre-aborted/mid-tunnel abort without uncaught errors, rejects truncated streams, and enforces body cap', async () => {
+  assert.equal(MAX_PROXY_RESPONSE_BYTES, 8 * 1024 * 1024);
+
+  const uncaught = [];
+  const onUncaught = err => uncaught.push(err);
+  process.on('uncaughtException', onUncaught);
+
+  // Local HTTP proxy server supporting normal, truncated, and oversized responses
+  const proxyServer = http.createServer((req, res) => {
+    if (req.url.includes('/ok')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, via: 'proxy' }));
+      return;
+    }
+    if (req.url.includes('/truncate')) {
+      res.writeHead(200, { 'Content-Length': '4096', 'Content-Type': 'text/plain' });
+      res.write('partial-chunk');
+      setTimeout(() => res.socket?.destroy(), 15);
+      return;
+    }
+    if (req.url.includes('/oversize')) {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('X'.repeat(4096));
+      return;
+    }
+    res.writeHead(404);
+    res.end('not found');
+  });
+
+  // Local raw TCP server simulating a slow HTTP CONNECT proxy to test abort during tunnel setup
+  const connectSockets = new Set();
+  const connectProxy = net.createServer(socket => {
+    connectSockets.add(socket);
+    socket.on('close', () => connectSockets.delete(socket));
+    socket.once('data', () => {
+      // Intentionally stall before replying 200 Connection Established
+    });
+  });
+
+  await new Promise(resolve => proxyServer.listen(0, '127.0.0.1', resolve));
+  await new Promise(resolve => connectProxy.listen(0, '127.0.0.1', resolve));
+  const proxyPort = proxyServer.address().port;
+  const connectPort = connectProxy.address().port;
+  const proxyUrl = `http://127.0.0.1:${proxyPort}`;
+  const connectProxyUrl = `http://127.0.0.1:${connectPort}`;
+
+  try {
+    // 1. Pre-aborted signal rejects cleanly with zero uncaught errors
+    const preAborted = new AbortController();
+    preAborted.abort(new Error('already aborted'));
+    await assert.rejects(
+      () => fetchViaProxy('http://example.test/ok', { method: 'GET', signal: preAborted.signal }, proxyUrl, 2000),
+      /取消/
+    );
+
+    // 2. Abort while waiting for HTTP CONNECT tunnel rejects cleanly and tears down socket
+    const tunnelAbort = new AbortController();
+    setTimeout(() => tunnelAbort.abort(), 30);
+    await assert.rejects(
+      () => fetchViaProxy('https://example.test/ok', { method: 'GET', signal: tunnelAbort.signal }, connectProxyUrl, 2000),
+      /取消/
+    );
+
+    // 3. Normal proxied request succeeds
+    const okRes = await fetchViaProxy('http://example.test/ok', { method: 'GET' }, proxyUrl, 2000);
+    assert.equal(okRes.ok, true);
+    assert.equal(okRes.status, 200);
+    assert.deepEqual(await okRes.json(), { ok: true, via: 'proxy' });
+
+    // 4. Truncated response stream (socket destroyed before end) rejects instead of hanging forever
+    await assert.rejects(
+      () => fetchViaProxy('http://example.test/truncate', { method: 'GET' }, proxyUrl, 2000),
+      /中断|关闭|aborted|closed|socket/i
+    );
+
+    // 5. Response exceeding maxResponseBytes rejects instead of buffering unboundedly
+    await assert.rejects(
+      () => fetchViaProxy('http://example.test/oversize', { method: 'GET', maxResponseBytes: 1024 }, proxyUrl, 2000),
+      /超过上限/
+    );
+
+    await new Promise(r => setTimeout(r, 30));
+    assert.equal(uncaught.length, 0, `Unexpected uncaughtException: ${uncaught[0]?.message}`);
+  } finally {
+    process.off('uncaughtException', onUncaught);
+    for (const s of connectSockets) s.destroy();
+    await new Promise(resolve => proxyServer.close(resolve));
+    await new Promise(resolve => connectProxy.close(resolve));
   }
 });
 

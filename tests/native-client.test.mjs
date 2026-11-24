@@ -976,3 +976,64 @@ test('unarchiveConversations and deleteConversations sync Redux summaries optimi
   assert.deepEqual(progressLog, ['1/3:arch-1', '2/3:arch-ghost', '3/3:arch-fail']);
   assert.ok(dispatched.some(a => a.type === 'trajectorySummaries/rollbackDelete' && a.payload.cascadeId === 'arch-fail'));
 });
+
+test('installRequestOverrides fails soft when conversation service is unmounted and binds sendService later via ensureRequestHook', async () => {
+  const baseConfig = { checkpointConfig: { enabled: true }, plannerConfig: { noToolExplanation: true } };
+  const nativeResolve = () => baseConfig;
+  const nativeSegment = arg => ({
+    leadingSteps: arg.leadingSteps || [],
+    tailSteps: [],
+    body: { type: 'collapsible', isActive: arg.running, content: { groups: arg.groups || [] } }
+  });
+  let currentElement = null;
+  const context = vm.createContext({
+    document: { querySelector: () => currentElement },
+    sjc: nativeResolve,
+    Yyc: nativeSegment,
+    I: { CascadeConfigSchema: {}, CheckpointConfigSchema: {}, CascadePlannerConfigSchema: {}, PromptSectionCustomizationConfigSchema: {}, PromptSectionSchema: {} },
+    tc: (_, value) => structuredClone(value),
+    Wb: (_, value) => value
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const adapter = context.__agyNativeAdapter;
+
+  // On cold start / login / /customizations (no conversation service in DOM), setters must NEVER throw
+  assert.doesNotThrow(() => {
+    adapter.setEnabled(true);
+    adapter.setStageUpdates(true);
+    adapter.setEfficientIO(true);
+    adapter.setPragmaticCoding(true);
+    adapter.setGoalBar(true);
+    adapter.setContextLimit(500000);
+  });
+
+  // Global hooks that do not require sendService are already active immediately
+  const cfg = context.sjc({});
+  assert.equal(cfg.checkpointConfig.maxTokenLimit, 500000);
+  assert.equal(cfg.plannerConfig.noToolExplanation, false);
+  assert.deepEqual(
+    Array.from(cfg.plannerConfig.promptSectionCustomizationConfig.appendPromptSections, p => p.title),
+    ['powertools_stage_updates', 'powertools_efficient_io', 'powertools_pragmatic_coding']
+  );
+  assert.notEqual(context.Yyc, nativeSegment);
+
+  // Later, when a conversation mounts and ensureRequestHook runs, sendUserCascadeMessage is patched with saved flags
+  const sentPayloads = [];
+  const mountedService = {
+    forkConversation() {},
+    async sendUserCascadeMessage(payload) { sentPayloads.push(payload); return payload; }
+  };
+  currentElement = { '__reactFiber$late': { tag: 10, type: {}, memoizedProps: { value: mountedService }, return: null } };
+  adapter.ensureRequestHook(currentElement);
+  await mountedService.sendUserCascadeMessage({ cascadeId: 'conv-late', items: [{ chunk: { case: 'text', value: 'hi' } }] });
+  assert.equal(sentPayloads.length, 1);
+  assert.equal(sentPayloads[0].cascadeConfig.checkpointConfig.maxTokenLimit, 500000);
+  assert.deepEqual(
+    Array.from(sentPayloads[0].cascadeConfig.plannerConfig.promptSectionCustomizationConfig.appendPromptSections, p => p.title),
+    ['powertools_stage_updates', 'powertools_efficient_io', 'powertools_pragmatic_coding']
+  );
+
+  adapter.dispose();
+  assert.equal(context.sjc, nativeResolve);
+  assert.equal(context.Yyc, nativeSegment);
+});
