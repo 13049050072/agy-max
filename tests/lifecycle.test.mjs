@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {collectPackage,writePackage,encodePackage,decodePackage,validatePackage,sha256,releaseName} from '../lib/package.mjs';
-import {installationPaths,installPlugin,uninstallPlugin,atomicJson} from '../lib/lifecycle.mjs';
+import {installationPaths,installPlugin,uninstallPlugin,atomicJson,assertOwnedPath} from '../lib/lifecycle.mjs';
 import {runUpdateJob,updateStatus,startUpdate} from '../lib/update-manager.mjs';
 import {serveRuntime,stopRuntimes,waitForRuntime,runtimeRecords} from '../lib/runtime-control.mjs';
 
@@ -188,5 +188,24 @@ test('install automatically disables legacy agy-powertools and migrates saved se
     writeFileSync(join(legacyData,'settings.json'),'{"language":"ja"}');
     await installPlugin({bundle:original,home:s.home,stop});
     assert.equal(readFileSync(join(s.paths.data,'settings.json'),'utf8'),'{"language":"en"}');
+  }finally{s.clean();}
+});
+
+test('dangling symlinks cannot bypass assertOwnedPath or assertTree during install and uninstall',async()=>{
+  const s=sandbox();const linkType=process.platform==='win32'?'junction':'dir';try{
+    const externalMissing=join(s.root,'nonexistent-outside');
+    const pluginsDir=join(s.paths.root,'config','plugins');
+    mkdirSync(pluginsDir,{recursive:true});
+    symlinkSync(externalMissing,s.paths.installed,linkType);
+    assert.throws(()=>assertOwnedPath(s.paths.home,s.paths.installed),/符号链接/);
+    assert.throws(()=>assertOwnedPath(s.paths.home,join(s.paths.installed,'nested','file.txt')),/符号链接/);
+    await assert.rejects(()=>installPlugin({bundle:original,home:s.home,stop}),/符号链接/);
+    assert.equal(existsSync(externalMissing),false);
+    rmSync(s.paths.installed,{force:true});
+
+    await installPlugin({bundle:original,home:s.home,stop});
+    symlinkSync(externalMissing,join(s.paths.installed,'dangling-entry'),linkType);
+    await assert.rejects(()=>uninstallPlugin({home:s.home,stop}),/符号链接/);
+    assert.equal(existsSync(externalMissing),false);
   }finally{s.clean();}
 });
