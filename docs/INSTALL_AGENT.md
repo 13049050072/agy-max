@@ -16,9 +16,11 @@
 
 仅安装用户指定的项目。不修改其他插件、账户、权限或聊天文件，不在当前对话发送测试提示，不要求管理员权限。
 
-## 可以直接复制的提示词
+## 一键复制给 Agent 的安装指令
 
-> 请帮我安装 Antigravity Max：https://github.com/wangbingnan136/agy-max 。先阅读 README 和 docs/INSTALL_AGENT.md，使用项目提供的统一安装器，优先使用已有 Node.js 或 Antigravity 自带运行环境。保留其他插件、账户设置和聊天记录，不要强制退出当前客户端。安装后核对版本并告诉我结果；需要重启时最后提醒我。
+```text
+请帮我安装 Antigravity Max（https://github.com/wangbingnan136/agy-max）：先阅读仓库内的 docs/INSTALL_AGENT.md，按统一安装脚本静默安装，保留现有聊天记录与配置，不要强关当前窗口，装完核对版本并提醒我重启即可。
+```
 
 若使用已下载的本地目录，将提示词中的链接替换为本地目录路径即可。
 

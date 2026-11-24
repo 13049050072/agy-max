@@ -130,11 +130,13 @@ On top of these foundations, `Antigravity Max` adds an **under-card Git &amp; te
 
 > Requirements: Antigravity installed and started at least once. Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` setups are migrated seamlessly, and pre-existing standalone `agy-fast` setups are preserved safely.
 
-### Option 1: Let an Agent install it (recommended)
+### Option 1: One-line prompt for your Agent (recommended)
 
-Send this prompt to Antigravity or another local coding agent:
+Click the copy button on the right and paste this directly into Antigravity (or Claude Code / Codex):
 
-> Please install Antigravity Max from https://github.com/wangbingnan136/agy-max . Read README_EN.md and docs/INSTALL_AGENT.md first, and run the unified installer provided by the project using local Node.js or Antigravity's bundled runtime. Keep all other plugins, account settings, and chat history intact, and do not force-close the running client. Verify the installed version afterward and remind me if a client restart is needed.
+```text
+Please install Antigravity Max from https://github.com/wangbingnan136/agy-max : read docs/INSTALL_AGENT.md first, run the unified installer without closing my active window, keep my existing chats and settings intact, and verify the installed version when done.
+```
 
 See [Agent installation guide](docs/INSTALL_AGENT.md) for details.
 

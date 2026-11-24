@@ -130,13 +130,15 @@
 
 > 环境要求：先安装并启动过一次 Antigravity。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置；若本机已有用户自行安装的 `agy-fast`，也会智能兼容不破坏原有自定义规则。
 
-### 方式一：发给 Agent 自动安装（推荐）
+### 方式一：一句话发给 Agent 自动安装（最推荐）
 
-把下面这段话直接发给 Antigravity 或其他可执行本地命令的 Agent：
+点右上角复制按钮，直接粘贴发给 Antigravity（或 Claude Code / Codex）即可全自动装好：
 
-> 请帮我安装 Antigravity Max：https://github.com/wangbingnan136/agy-max 。先阅读 README 和 docs/INSTALL_AGENT.md，使用项目提供的统一安装器，优先使用已有 Node.js 或 Antigravity 自带运行环境。保留其他插件、账户设置和聊天记录，不要强制退出当前客户端。安装后核对版本并告诉我结果；需要重启时最后提醒我。
+```text
+请帮我安装 Antigravity Max（https://github.com/wangbingnan136/agy-max）：先阅读仓库内的 docs/INSTALL_AGENT.md，按统一安装脚本静默安装，保留现有聊天记录与配置，不要强关当前窗口，装完核对版本并提醒我重启即可。
+```
 
-详细步骤见 [Agent 安装指南](docs/INSTALL_AGENT.md)。
+详细执行规范见 [Agent 安装指南](docs/INSTALL_AGENT.md)。
 
 ### 方式二：命令行安装
 
