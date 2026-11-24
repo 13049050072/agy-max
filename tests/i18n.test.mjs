@@ -164,3 +164,124 @@ test('Swarm UI strings translate cleanly in zh-CN and zh-TW without middle dots 
   const i18nSrc = readFileSync('lib/native-i18n.js', 'utf8');
   assert.ok(i18nSrc.includes('.post-body') && i18nSrc.includes('#ov-frame'));
 });
+
+test('native-i18n preserves dynamic title/placeholder updates and handles ja/yue languages and localStorage restoration', () => {
+  const makeEl = (attrs = {}) => {
+    const map = new Map(Object.entries(attrs));
+    return {
+      nodeType: 1,
+      isConnected: true,
+      closest: () => null,
+      getAttribute: k => (map.has(k) ? map.get(k) : null),
+      hasAttribute: k => map.has(k),
+      setAttribute: (k, v) => { map.set(k, String(v)); },
+      removeAttribute: k => { map.delete(k); }
+    };
+  };
+
+  let observerCb = null;
+  const copyBtn = makeEl({ title: 'Copy' });
+  const searchInput = makeEl({ placeholder: 'Search' });
+  const textNode = {
+    nodeType: 3,
+    nodeValue: 'Settings',
+    isConnected: true,
+    parentElement: { closest: () => null }
+  };
+  const body = {
+    nodeType: 1,
+    isConnected: true,
+    closest: () => null,
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    setAttribute() {},
+    removeAttribute() {},
+    querySelectorAll: () => [copyBtn, searchInput]
+  };
+  const document = {
+    nodeType: 9,
+    body,
+    createTreeWalker: () => {
+      let done = false;
+      return { nextNode: () => (done ? null : ((done = true), textNode)) };
+    },
+    querySelectorAll: () => [copyBtn, searchInput]
+  };
+  const store = new Map();
+  const localStorage = {
+    getItem: k => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)); }
+  };
+  const context = vm.createContext({
+    document,
+    localStorage,
+    NodeFilter: { SHOW_TEXT: 4 },
+    MutationObserver: class {
+      constructor(cb) { observerCb = cb; }
+      observe() {}
+      disconnect() {}
+    },
+    __agyToZhTw: toZhTw
+  });
+  vm.runInContext(readFileSync('lib/native-i18n.js', 'utf8'), context);
+  const { t } = context.__agyI18n;
+  const loc = context.__agyLocalization;
+
+  // Initial zh-CN translation
+  assert.equal(copyBtn.getAttribute('title'), '复制');
+  assert.equal(searchInput.getAttribute('placeholder'), '搜索');
+  assert.equal(textNode.nodeValue, '设置');
+
+  // External React update: title changes from "Copy" -> "Copied"
+  copyBtn.setAttribute('title', 'Copied');
+  observerCb([{ type: 'attributes', target: copyBtn, attributeName: 'title' }]);
+  assert.equal(copyBtn.getAttribute('title'), '已复制');
+  assert.equal(copyBtn.getAttribute('data-agy-original-title'), 'Copied');
+
+  // External React update: title changes to untranslated dynamic string
+  copyBtn.setAttribute('title', 'Copy /tmp/demo.txt');
+  observerCb([{ type: 'attributes', target: copyBtn, attributeName: 'title' }]);
+  assert.equal(copyBtn.getAttribute('title'), 'Copy /tmp/demo.txt');
+  assert.equal(copyBtn.hasAttribute('data-agy-original-title'), false);
+
+  // External React update: placeholder changes from "Search" -> "Search conversations..."
+  searchInput.setAttribute('placeholder', 'Search conversations...');
+  observerCb([{ type: 'attributes', target: searchInput, attributeName: 'placeholder' }]);
+  assert.equal(searchInput.getAttribute('placeholder'), '搜索会话…');
+
+  // ja acts as English passthrough in t(), textNode(), and attributes()
+  assert.equal(t('Settings', 'ja'), 'Settings');
+  assert.equal(t('输入', 'ja'), 'Input');
+  loc.apply('ja');
+  assert.equal(textNode.nodeValue, 'Settings');
+  assert.equal(searchInput.getAttribute('placeholder'), 'Search conversations...');
+  assert.equal(store.get('agy-powertools-language'), 'ja');
+
+  // yue uses Traditional Chinese mapping in t(), textNode(), and attributes()
+  assert.equal(t('Settings', 'yue'), '設定');
+  assert.equal(t('Open File', 'yue'), '開啟檔案');
+  loc.apply('yue');
+  assert.equal(textNode.nodeValue, '設定');
+  assert.equal(searchInput.getAttribute('placeholder'), '搜尋會話…');
+  assert.equal(store.get('agy-powertools-language'), 'yue');
+
+  loc.dispose();
+  assert.equal(textNode.nodeValue, 'Settings');
+  assert.equal(searchInput.getAttribute('placeholder'), 'Search conversations...');
+  assert.equal(searchInput.hasAttribute('data-agy-original-placeholder'), false);
+
+  // Re-initialize from localStorage restores both 'ja' and 'yue'
+  for (const savedLang of ['ja', 'yue']) {
+    store.set('agy-powertools-language', savedLang);
+    const freshCtx = vm.createContext({
+      document,
+      localStorage,
+      NodeFilter: { SHOW_TEXT: 4 },
+      MutationObserver: class { observe() {} disconnect() {} },
+      __agyToZhTw: toZhTw
+    });
+    vm.runInContext(readFileSync('lib/native-i18n.js', 'utf8'), freshCtx);
+    assert.equal(freshCtx.__agyLocalization.language, savedLang);
+    freshCtx.__agyLocalization.dispose();
+  }
+});

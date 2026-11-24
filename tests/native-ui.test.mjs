@@ -1043,3 +1043,98 @@ test('composer under-card status strip mounts outside .surface-composer-card aft
 
   p.context.__agyPowertools.dispose();
 });
+
+test('native-ui MutationObserver ignores streaming .xterm/[data-markdown-root] mutations and prunes detached changedLabels', async () => {
+  const p = page(true);
+  let observerCb = null;
+  p.context.MutationObserver = class {
+    constructor(cb) { observerCb = cb; }
+    observe() {}
+    disconnect() {}
+  };
+  let scheduledCount = 0;
+  let scheduledFn = null;
+  p.context.setTimeout = (fn, ms) => {
+    if (ms === 24) {
+      scheduledCount++;
+      scheduledFn = fn;
+    }
+    return scheduledCount;
+  };
+  p.context.clearTimeout = () => {};
+  p.context.ReactDOM = { createRoot() { return { render() {}, unmount() {} }; } };
+  p.context.HU = meta => meta?.idx ?? 0;
+  p.context.__agyNativeAdapter.fiber = () => ({
+    memoizedProps: { container: { steps: [{ step: { case: 'userInput' }, metadata: { idx: 0 } }] } },
+    return: null
+  });
+  p.context.__agyInitialSettings = { enabled: true, timing: true };
+
+  // Set up one worked-for label to populate changedLabels
+  const workedLabel = {
+    textContent: 'Worked for 3s',
+    isConnected: true
+  };
+  const nativeWorked = {
+    isConnected: true,
+    attrs: new Map(),
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    querySelectorAll: sel => (sel === 'span' ? [workedLabel] : [])
+  };
+  let responses = [{
+    isConnected: true,
+    firstChild: null,
+    children: [],
+    insertBefore(child) { child.isConnected = true; },
+    closest: () => null,
+    querySelector: sel => (sel === '[data-testid="worked-for-collapsible"]' ? nativeWorked : null),
+    querySelectorAll: () => []
+  }];
+  p.context.location.pathname = '/c/conv-stream';
+  p.document.querySelectorAll = sel => (sel === '[data-testid="agent-response"]' ? responses : []);
+  p.context.__agyPowertoolsHost = raw => {
+    const req = JSON.parse(raw);
+    if (req.method === 'settings.get') {
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { enabled: true, timing: true }));
+      return;
+    }
+    if (req.method === 'state') {
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, {
+        conversationId: 'conv-stream',
+        contextWindow: { usedPercent: 10, usedTokens: 1000, maxTokens: 10000, categories: [] },
+        telemetry: {},
+        turns: [{ turnNumber: 1, stepIndexStart: 0, stepIndexEnd: 1, status: 'completed', completedAtIso: '2026-01-01T00:00:00Z', durationMs: 4200 }],
+        requests: []
+      }));
+      return;
+    }
+    queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, {}));
+  };
+
+  vm.runInContext(source, p.context);
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(workedLabel.textContent, '用时 4秒');
+
+  // Mutations inside .xterm or [data-markdown-root] must NOT schedule mount()
+  const beforeCount = scheduledCount;
+  observerCb([
+    { target: { closest: sel => (sel.includes('.xterm') ? {} : null) } },
+    { target: { closest: sel => (sel.includes('[data-markdown-root]') ? {} : null) } }
+  ]);
+  assert.equal(scheduledCount, beforeCount, 'Mutations inside .xterm and [data-markdown-root] must be skipped');
+
+  // Mutations outside excluded subtrees still schedule mount()
+  observerCb([{ target: { closest: () => null } }]);
+  assert.equal(scheduledCount, beforeCount + 1);
+
+  // Detach workedLabel and run mount(); changedLabels prunes it so dispose() does not keep/touch it
+  workedLabel.isConnected = false;
+  nativeWorked.isConnected = false;
+  responses = [];
+  scheduledFn();
+  workedLabel.isConnected = true; // Flip back to observe whether dispose() still holds a reference
+  p.context.__agyPowertools.dispose();
+  assert.equal(workedLabel.textContent, '用时 4秒', 'Pruned detached label must no longer be retained in changedLabels');
+});

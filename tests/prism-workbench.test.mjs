@@ -1694,3 +1694,90 @@ test('Edge cases: Effort drag/keyboard, Thought retranslate, Binary Inline Diff,
 
   wb.dispose();
 });
+
+test('Chat Mode preserves folder input across DOM mutations/syncs, avoids duplicate dragstart listeners, and prunes disconnected rows', async () => {
+  const dom = createMockDom();
+  const { document } = dom;
+  const sidebar = document.createElement('aside');
+  sidebar.setAttribute('role', 'navigation');
+  sidebar.setAttribute('aria-label', 'Sidebar');
+  const row1 = document.createElement('div');
+  row1.setAttribute('data-testid', 'conversation-row-sidebar');
+  const link1 = document.createElement('a');
+  link1.setAttribute('href', '/c/conv-keep');
+  link1.textContent = 'Keep me';
+  row1.appendChild(link1);
+  sidebar.appendChild(row1);
+  document.body.appendChild(sidebar);
+
+  let currentLang = 'zh-CN';
+  const wb = dom.createWorkbench({
+    options: () => ({ enabled: true, chatModeBeta: true, language: currentLang }),
+    request: async method => {
+      if (method === 'chatFolders.get') {
+        return { ok: true, folders: [{ id: 'f1', name: 'Work' }], assignments: {} };
+      }
+      return { ok: true };
+    }
+  });
+
+  sidebar.querySelector('[data-testid="agy-mode-chat"]').click();
+  await flush();
+
+  const inputBefore = sidebar.querySelector('[data-testid="agy-chat-folder-input"]');
+  const chipBefore = sidebar.querySelector('[data-testid="agy-chat-folder-f1"]');
+  assert.ok(inputBefore);
+  assert.ok(chipBefore);
+  inputBefore.value = 'Draft folder name';
+
+  // Repeated syncs (e.g. triggered by streaming DOM mutations or timers) must NOT recreate input or chips
+  wb.sync();
+  wb.sync();
+  const inputAfter = sidebar.querySelector('[data-testid="agy-chat-folder-input"]');
+  const chipAfter = sidebar.querySelector('[data-testid="agy-chat-folder-f1"]');
+  assert.strictEqual(inputAfter, inputBefore, 'Folder input element must remain mounted without losing focus');
+  assert.equal(inputAfter.value, 'Draft folder name', 'User draft in folder input must not be wiped');
+  assert.strictEqual(chipAfter, chipBefore, 'Unchanged folder chips must not be rebuilt unnecessarily');
+
+  // Language change updates placeholder/button while still preserving the input node & draft
+  currentLang = 'en';
+  wb.sync();
+  assert.strictEqual(sidebar.querySelector('[data-testid="agy-chat-folder-input"]'), inputBefore);
+  assert.equal(inputBefore.value, 'Draft folder name');
+  assert.equal(inputBefore.getAttribute('placeholder'), 'New folder name...');
+
+  // Repeated Chat -> Code -> Chat toggles must not stack duplicate dragstart listeners
+  for (let i = 0; i < 3; i++) {
+    sidebar.querySelector('[data-testid="agy-mode-code"]').click();
+    sidebar.querySelector('[data-testid="agy-mode-chat"]').click();
+  }
+  let setDataCalls = 0;
+  const payload = new Map();
+  row1.dispatchEvent({
+    type: 'dragstart',
+    bubbles: true,
+    dataTransfer: {
+      setData(k, v) {
+        if (k === 'text/agy-conversation-id') setDataCalls++;
+        payload.set(k, v);
+      }
+    }
+  });
+  assert.equal(setDataCalls, 1, 'dragstart listener must only fire once per row after repeated mode toggles');
+  assert.equal(payload.get('text/agy-conversation-id'), 'conv-keep');
+
+  // Detached row is pruned on sync without throwing or keeping stale attributes on dispose
+  const row2 = document.createElement('div');
+  row2.setAttribute('data-testid', 'conversation-row-sidebar');
+  const link2 = document.createElement('a');
+  link2.setAttribute('href', '/c/conv-detached');
+  row2.appendChild(link2);
+  sidebar.appendChild(row2);
+  wb.sync();
+  assert.equal(row2.getAttribute('draggable'), 'true');
+  row2.remove();
+  wb.sync();
+  wb.dispose();
+  // Because row2 was pruned before dispose(), dispose() did not touch the detached element
+  assert.equal(row2.getAttribute('draggable'), 'true');
+});

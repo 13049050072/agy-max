@@ -503,6 +503,45 @@ test('prism-panels.js renders CategoryFilter, ScenePresetBar, Optics, and Workbe
   assert.equal(pickedCategory, 'optics');
   assert.deepEqual(focusCalls, [1]);
 
+  // Keyboard navigation with hiddenCategories: ['thought'] skips hidden tab & never goes out of bounds
+  const hiddenFocusCalls = [];
+  const makeChildren = count => Array.from({ length: count }, (_, idx) => ({ focus() { hiddenFocusCalls.push(idx); } }));
+  let hiddenPicked = '';
+  const filteredWbTree = h.render(h.panels.SettingsCategoryFilter, {
+    value: 'workbench',
+    hiddenCategories: ['thought'],
+    onChange: next => { hiddenPicked = next; }
+  });
+  assert.equal(h.findByTestId(filteredWbTree, 'agy-settings-cat-thought'), null);
+  h.findByTestId(filteredWbTree, 'agy-settings-cat-workbench').props.onKeyDown({
+    key: 'ArrowRight',
+    preventDefault() {},
+    currentTarget: { parentElement: { children: makeChildren(6) } }
+  });
+  assert.equal(hiddenPicked, 'telemetry');
+  assert.deepEqual(hiddenFocusCalls, [3]);
+
+  h.findByTestId(filteredWbTree, 'agy-settings-cat-workbench').props.onKeyDown({
+    key: 'End',
+    preventDefault() {},
+    currentTarget: { parentElement: { children: makeChildren(6) } }
+  });
+  assert.equal(hiddenPicked, 'beta');
+  assert.deepEqual(hiddenFocusCalls, [3, 5]);
+
+  const filteredTelemetryTree = h.render(h.panels.SettingsCategoryFilter, {
+    value: 'telemetry',
+    hiddenCategories: ['thought'],
+    onChange: next => { hiddenPicked = next; }
+  });
+  h.findByTestId(filteredTelemetryTree, 'agy-settings-cat-telemetry').props.onKeyDown({
+    key: 'ArrowLeft',
+    preventDefault() {},
+    currentTarget: { parentElement: { children: makeChildren(6) } }
+  });
+  assert.equal(hiddenPicked, 'workbench');
+  assert.deepEqual(hiddenFocusCalls, [3, 5, 2]);
+
   // Re-render preset bar confirms active state follows options
   const activePresetTree = h.render(h.panels.ScenePresetBar);
   assert.equal(h.findByTestId(activePresetTree, 'agy-scene-preset-ultra').props['aria-pressed'], true);
