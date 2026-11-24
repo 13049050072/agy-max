@@ -26,6 +26,9 @@ test('model effort variants aggregate with catalog entries and preserve unpriced
  assert.deepEqual(modelIdentity('Orchestrator (Argon)'),{id:'gemini-pro-orchestrator-argon',effort:''});
  assert.deepEqual(modelIdentity('Orchestrator Gemini 4 Neon Extra High'),{id:'gemini-pro-orchestrator-neon',effort:'xhigh'});
  assert.deepEqual(modelIdentity('Orchestrator (Claude Opus 5.5)'),{id:'orchestrator-claude-opus-5-5',effort:''});
+ assert.deepEqual(modelIdentity('Orchestrator (Claude Opus 5.5) (High)'),{id:'orchestrator-claude-opus-5-5',effort:'high'});
+ assert.deepEqual(modelIdentity('Orchestrator (Neon) (XHigh)'),{id:'gemini-pro-orchestrator-neon',effort:'xhigh'});
+ assert.deepEqual(modelIdentity('Orchestrator (Argon) (Medium)'),{id:'gemini-pro-orchestrator-argon',effort:'medium'});
  assert.deepEqual(modelIdentity('Orchestrator Claude Opus 5.5 (Medium)'),{id:'orchestrator-claude-opus-5-5',effort:'medium'});
  assert.deepEqual(modelIdentity('Claude Opus 5.5 (Orchestrator)'),{id:'claude-opus-5-5',effort:''});
  const summary=summarizeRequests([
@@ -225,4 +228,26 @@ test('weeklyQuota resolves exact native reset windows, per-pool cycle boundaries
     { id: 'unattr-req', model: 'Gemini 4 Carbon (High)', timestampMs: geminiCycleStartMs + 120_000, durationMs: 1000, inputTokens: 500, cacheReadTokens: 0, outputTokens: 100, accountEmail: '', status: 'success' }
   ];
   assert.deepEqual(summarizeRequests(mixedAccountReqs, scopedRange).requests.map(r => r.id), ['alice-req', 'unattr-req']);
+
+  // Case 7: When isolateByAccount is active (explicit or multi-account), unattributed history is rejected
+  const isolatedRange = resolveWeeklyQuotaWindow({ account: liveAccount, email: 'alice@example.com', isolateByAccount: true, fetchedAtMs, now });
+  assert.deepEqual(summarizeRequests(mixedAccountReqs, isolatedRange).requests.map(r => r.id), ['alice-req']);
+  const multiAcctRange = resolveWeeklyQuotaWindow({
+    account: liveAccount,
+    email: 'alice@example.com',
+    accounts: { accounts: [{ id: 'a1', email: 'alice@example.com' }, { id: 'a2', email: 'bob@example.com' }] },
+    fetchedAtMs,
+    now
+  });
+  assert.deepEqual(summarizeRequests(mixedAccountReqs, multiAcctRange).requests.map(r => r.id), ['alice-req']);
+
+  // Case 8: Non-finite costUsd values (NaN / Infinity) never poison totals or chart points
+  const safeSummary = summarizeRequests([
+    { id: 'good', model: 'Gemini 4 Carbon (High)', timestampMs: geminiCycleStartMs + 60_000, inputTokens: 1000, cacheReadTokens: 0, outputTokens: 100, costUsd: 0.25, status: 'success' },
+    { id: 'nan', model: 'Gemini 4 Carbon (High)', timestampMs: geminiCycleStartMs + 90_000, inputTokens: 1000, cacheReadTokens: 0, outputTokens: 100, costUsd: Number.NaN, status: 'success' },
+    { id: 'inf', model: 'Gemini 4 Carbon (High)', timestampMs: geminiCycleStartMs + 120_000, inputTokens: 1000, cacheReadTokens: 0, outputTokens: 100, costUsd: Number.POSITIVE_INFINITY, status: 'success' }
+  ], { start: geminiCycleStartMs, end: now });
+  assert.equal(safeSummary.cost, 0.25);
+  assert.equal(safeSummary.priced, 1);
+  assert.ok(safeSummary.points.every(p => Number.isFinite(p.cost)));
 });

@@ -26,6 +26,8 @@ test('shortSubagentModel, summarizeSubagentSession, and aggregateSubagentTotals 
     { model: 'gemini-4-neon', input: 3, output: 15, cache: 0.15 }
   ];
   assert.ok(estimateRequestsCost([{ model: 'Gemini 4 Neon (High)', inputTokens: 1_000_000, cacheReadTokens: 0, outputTokens: 0 }], rates) === 3);
+  assert.equal(estimateRequestsCost([{ model: 'Gemini 4 Neon (High)', inputTokens: 1_000_000 }], rates), 3);
+  assert.equal(estimateRequestsCost([{ model: 'Gemini 4 Neon (High)', inputTokens: 1_000_000 }], [{ model: 'gemini-4-neon', input: Number.NaN, output: 1, cache: 0 }]), null);
   assert.equal(estimateRequestsCost([], rates), 0);
   assert.equal(estimateRequestsCost([{ model: 'unknown-model', inputTokens: 1000, outputTokens: 100 }], rates), null);
   const s1 = summarizeSubagentSession({
