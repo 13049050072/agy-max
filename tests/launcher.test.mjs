@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -429,30 +429,35 @@ test('openLocalFile dispatches platform commands and blocks runnable Windows fil
   const dir = mkdtempSync(join(tmpdir(), 'agy-open-file-'));
   try {
     const doc = join(dir, 'notes.md');
-    const commaFile = join(dir, 'a,b.txt');
-    const script = join(dir, 'run.js');
+    const winDoc = 'C:\\Users\\dev\\notes.md';
+    const winDocUri = 'file:///C:/Users/dev/notes.md';
+    const winCommaFile = 'C:\\Users\\dev\\a,b.txt';
+    const winCommaUri = 'file:///C:/Users/dev/a,b.txt';
+    const winScript = 'C:\\Users\\dev\\run.js';
+    const winScriptUri = 'file:///C:/Users/dev/run.js';
     writeFileSync(doc, '# hi', 'utf8');
-    writeFileSync(commaFile, 'x', 'utf8');
-    writeFileSync(script, 'console.log(1)', 'utf8');
     const calls = [];
     const fakeSpawn = (cmd, args, opts) => {
       calls.push({ cmd, args, opts });
       return { unref() {} };
     };
+    const fakeWinFile = { exists: () => true, stat: () => ({ isDirectory: () => false }) };
 
-    await openLocalFile(pathToFileURL(doc).href, { action: 'open', platform: 'win32', spawnProcess: fakeSpawn });
-    await openLocalFile(pathToFileURL(doc).href, { action: 'reveal', platform: 'win32', spawnProcess: fakeSpawn });
-    await openLocalFile(pathToFileURL(commaFile).href, { action: 'reveal', platform: 'win32', spawnProcess: fakeSpawn });
-    await openLocalFile(pathToFileURL(doc).href, { action: 'reveal', platform: 'darwin', spawnProcess: fakeSpawn });
-    await openLocalFile(pathToFileURL(doc).href, { action: 'reveal', platform: 'linux', spawnProcess: fakeSpawn });
-    await openLocalFile(pathToFileURL(script).href, { action: 'reveal', platform: 'win32', spawnProcess: fakeSpawn });
+    await openLocalFile(winDocUri, { action: 'open', platform: 'win32', spawnProcess: fakeSpawn, ...fakeWinFile });
+    await openLocalFile(winDocUri, { action: 'reveal', platform: 'win32', spawnProcess: fakeSpawn, ...fakeWinFile });
+    await openLocalFile(winCommaUri, { action: 'reveal', platform: 'win32', spawnProcess: fakeSpawn, ...fakeWinFile });
+    await openLocalFile(pathToFileURL(doc).href, { action: 'reveal', platform: 'darwin', spawnProcess: fakeSpawn, ...fakeWinFile });
+    await openLocalFile(pathToFileURL(doc).href, { action: 'reveal', platform: 'linux', spawnProcess: fakeSpawn, ...fakeWinFile });
+    await openLocalFile(winScriptUri, { action: 'reveal', platform: 'win32', spawnProcess: fakeSpawn, ...fakeWinFile });
 
-    assert.deepEqual(calls[0], { cmd: 'explorer.exe', args: [doc], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[1], { cmd: 'explorer.exe', args: [`/select,${doc}`], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[2], { cmd: 'explorer.exe', args: [`/select,"${commaFile}"`], opts: { detached: true, stdio: 'ignore', windowsVerbatimArguments: true } });
-    assert.deepEqual(calls[3], { cmd: 'open', args: ['-R', doc], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[4], { cmd: 'xdg-open', args: [dir], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[5], { cmd: 'explorer.exe', args: [`/select,${script}`], opts: { detached: true, stdio: 'ignore' } });
+    const posixDoc = doc;
+    const posixDir = dir;
+    assert.deepEqual(calls[0], { cmd: 'explorer.exe', args: [winDoc], opts: { detached: true, stdio: 'ignore' } });
+    assert.deepEqual(calls[1], { cmd: 'explorer.exe', args: [`/select,${winDoc}`], opts: { detached: true, stdio: 'ignore' } });
+    assert.deepEqual(calls[2], { cmd: 'explorer.exe', args: [`/select,"${winCommaFile}"`], opts: { detached: true, stdio: 'ignore', windowsVerbatimArguments: true } });
+    assert.deepEqual(calls[3], { cmd: 'open', args: ['-R', posixDoc], opts: { detached: true, stdio: 'ignore' } });
+    assert.deepEqual(calls[4], { cmd: 'xdg-open', args: [posixDir], opts: { detached: true, stdio: 'ignore' } });
+    assert.deepEqual(calls[5], { cmd: 'explorer.exe', args: [`/select,${winScript}`], opts: { detached: true, stdio: 'ignore' } });
 
     // Windows LAN UNC paths with spaces quote cleanly for explorer /select
     await openLocalFile('file://192.168.1.10/share/a%20b.png', {
@@ -468,9 +473,9 @@ test('openLocalFile dispatches platform commands and blocks runnable Windows fil
       opts: { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }
     });
 
-    assert.equal(isWindowsRunnableFile(script), true);
-    assert.equal(isWindowsRunnableFile(doc), false);
-    await assert.rejects(() => openLocalFile(pathToFileURL(script).href, { action: 'open', platform: 'win32', spawnProcess: fakeSpawn }), /可能直接执行/);
+    assert.equal(isWindowsRunnableFile(winScript), true);
+    assert.equal(isWindowsRunnableFile(winDoc), false);
+    await assert.rejects(() => openLocalFile(winScriptUri, { action: 'open', platform: 'win32', spawnProcess: fakeSpawn, ...fakeWinFile }), /可能直接执行/);
     await assert.rejects(() => openLocalFile(pathToFileURL(doc).href, { action: 'delete', spawnProcess: fakeSpawn }), /不支持的文件操作/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -483,6 +488,8 @@ test('copyLocalFile runs asynchronously across platforms with safe URI encoding'
     const file = join(dir, 'shot #1.png');
     writeFileSync(file, 'png', 'utf8');
     const fileUri = pathToFileURL(file).href;
+    const winFile = 'C:\\Users\\dev\\shot #1.png';
+    const winFileUri = 'file:///C:/Users/dev/shot%20%231.png';
     const calls = [];
     const fakeSpawn = (cmd, args, opts) => {
       const child = new EventEmitter();
@@ -499,17 +506,18 @@ test('copyLocalFile runs asynchronously across platforms with safe URI encoding'
       return child;
     };
 
-    await copyLocalFile(fileUri, { platform: 'win32', spawnProcess: fakeSpawn, env: {} });
-    await copyLocalFile(fileUri, { platform: 'darwin', spawnProcess: fakeSpawn, env: {} });
-    await copyLocalFile(fileUri, { platform: 'linux', spawnProcess: fakeSpawn, env: {} });
+    await copyLocalFile(winFileUri, { platform: 'win32', spawnProcess: fakeSpawn, exists: () => true, env: {} });
+    await copyLocalFile(fileUri, { platform: 'darwin', spawnProcess: fakeSpawn, exists: () => true, env: {} });
+    await copyLocalFile(fileUri, { platform: 'linux', spawnProcess: fakeSpawn, exists: () => true, env: {} });
 
+    const posixFile = file;
     assert.equal(calls[0].cmd, 'powershell.exe');
-    assert.equal(calls[0].opts.env.AGY_CLIPBOARD_PATH, file);
+    assert.equal(calls[0].opts.env.AGY_CLIPBOARD_PATH, winFile);
     assert.equal(calls[1].cmd, 'osascript');
-    assert.equal(calls[1].opts.env.AGY_CLIPBOARD_PATH, file);
+    assert.equal(calls[1].opts.env.AGY_CLIPBOARD_PATH, posixFile);
     assert.equal(calls[2].cmd, 'wl-copy');
     assert.equal(calls[3].cmd, 'xclip');
-    assert.equal(calls[3].stdin, `${pathToFileURL(file).href}\n`);
+    assert.equal(calls[3].stdin, `${pathToFileURL(posixFile).href}\n`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -714,5 +722,276 @@ test('parseFileUriAnchor, resolveExternalEditor, and openInExternalEditor jump t
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Windows openInExternalEditor prefers native .exe over .cmd and hardens .cmd fallback against injection and /s quote stripping', async () => {
+  const calls = [];
+  const fakeSpawn = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return { on() {}, unref() {} };
+  };
+  const fakeStat = () => ({ isDirectory: () => false });
+
+  // 1. Custom PATH containing ...\bin\code.cmd resolves sibling parent ...\Code.exe directly
+  const vscodeFiles = new Set([
+    'D:\\Tools\\Microsoft VS Code\\bin\\code.cmd',
+    'D:\\Tools\\Microsoft VS Code\\Code.exe',
+    'C:\\Users\\Alice Smith\\proj\\a&b.js'
+  ]);
+  const resolvedVscode = resolveExternalEditor({
+    preferred: 'vscode',
+    platform: 'win32',
+    env: { PATH: 'D:\\Tools\\Microsoft VS Code\\bin' },
+    exists: p => vscodeFiles.has(p)
+  });
+  assert.equal(resolvedVscode.command, 'D:\\Tools\\Microsoft VS Code\\Code.exe');
+
+  await openInExternalEditor('file:///C:/Users/Alice%20Smith/proj/a%26b.js#L12C3', {
+    preferred: 'vscode',
+    platform: 'win32',
+    env: { PATH: 'D:\\Tools\\Microsoft VS Code\\bin', ELECTRON_RUN_AS_NODE: '1' },
+    spawnProcess: fakeSpawn,
+    exists: p => vscodeFiles.has(p),
+    stat: fakeStat
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'D:\\Tools\\Microsoft VS Code\\Code.exe');
+  assert.deepEqual(calls[0].args, ['-g', 'C:\\Users\\Alice Smith\\proj\\a&b.js:12:3']);
+  assert.equal(calls[0].opts.windowsVerbatimArguments, undefined);
+  assert.equal(calls[0].opts.env.ELECTRON_RUN_AS_NODE, undefined);
+
+  // 2. Cursor nested resources\app\bin\cursor.cmd resolves parent ...\Cursor.exe directly
+  const cursorFiles = new Set([
+    'D:\\Apps\\cursor\\resources\\app\\bin\\cursor.cmd',
+    'D:\\Apps\\cursor\\Cursor.exe'
+  ]);
+  const resolvedCursor = resolveExternalEditor({
+    preferred: 'cursor',
+    platform: 'win32',
+    env: { PATH: 'D:\\Apps\\cursor\\resources\\app\\bin' },
+    exists: p => cursorFiles.has(p)
+  });
+  assert.equal(resolvedCursor.command, 'D:\\Apps\\cursor\\Cursor.exe');
+
+  // 3. Standalone .cmd wrapper fallback wraps full command line in outer quotes with windowsVerbatimArguments: true
+  const shimFiles = new Set([
+    'C:\\My Shims\\code.cmd',
+    'C:\\Users\\Alice Smith\\proj\\index.mjs',
+    'C:\\Users\\Alice Smith\\proj\\evil&calc.mjs',
+    'C:\\Users\\Alice Smith\\proj\\evil%TEMP%.mjs',
+    'C:\\Users\\Alice Smith\\proj\\evil|pipe.mjs'
+  ]);
+  await openInExternalEditor('file:///C:/Users/Alice%20Smith/proj/index.mjs#L5', {
+    preferred: 'vscode',
+    platform: 'win32',
+    env: { PATH: 'C:\\My Shims', ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
+    spawnProcess: fakeSpawn,
+    exists: p => shimFiles.has(p),
+    stat: fakeStat
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].cmd, 'C:\\Windows\\System32\\cmd.exe');
+  assert.deepEqual(calls[1].args, [
+    '/d',
+    '/s',
+    '/c',
+    '""C:\\My Shims\\code.cmd" "-g" "C:\\Users\\Alice Smith\\proj\\index.mjs:5:1""'
+  ]);
+  assert.equal(calls[1].opts.windowsVerbatimArguments, true);
+
+  // 4. Standalone .cmd wrapper rejects cmd.exe metacharacters (BatBadBut protection)
+  for (const badUri of [
+    'file:///C:/Users/Alice%20Smith/proj/evil%26calc.mjs',
+    'file:///C:/Users/Alice%20Smith/proj/evil%25TEMP%25.mjs',
+    'file:///C:/Users/Alice%20Smith/proj/evil%7Cpipe.mjs'
+  ]) {
+    await assert.rejects(
+      () => openInExternalEditor(badUri, {
+        preferred: 'vscode',
+        platform: 'win32',
+        env: { PATH: 'C:\\My Shims' },
+        spawnProcess: fakeSpawn,
+        exists: p => shimFiles.has(p),
+        stat: fakeStat
+      }),
+      /不安全字符/
+    );
+  }
+  assert.equal(calls.length, 2);
+});
+
+test('Windows file URI normalization and validation block all UNC/SMB bypass variants', async () => {
+  const fakeLookup = async host => {
+    if (host === 'evil.example') return [{ address: '93.184.216.34', family: 4 }];
+    throw new Error('ENOTFOUND');
+  };
+
+  // Multi-slash, mixed-slash, and percent-encoded UNC prefixes pointing to remote hosts must be rejected
+  for (const bypassUri of [
+    'file:///\\evil.example/share/secret.txt',
+    'file://///evil.example/share/secret.txt',
+    'file:///\\\\evil.example/share/secret.txt',
+    'file:///%5cevil.example/share/secret.txt',
+    'file:///%5c%5cevil.example/share/secret.txt',
+    'file:///%2fevil.example/share/secret.txt',
+    'file://\\\\evil.example/share/secret.txt',
+    'file://localhost//evil.example/share/secret.txt',
+    'file://localhost/\\evil.example/share/secret.txt',
+    'file:///\\\\?\\UNC\\evil.example\\share\\secret.txt',
+    'file:///var/folders/non-drive/secret.txt'
+  ]) {
+    assert.throws(
+      () => resolveLocalFilePath(bypassUri, { platform: 'win32' }),
+      /仅支持本机或局域网文件路径|文件路径格式无效/,
+      `resolveLocalFilePath should reject: ${bypassUri}`
+    );
+    await assert.rejects(
+      () => resolveVerifiedLocalFilePath(bypassUri, { platform: 'win32', lookup: fakeLookup }),
+      /仅支持本机或局域网文件路径|文件路径格式无效|无法解析局域网主机路径/,
+      `resolveVerifiedLocalFilePath should reject: ${bypassUri}`
+    );
+  }
+
+  // Legitimate LAN IP UNC variants and drive-letter URIs continue to work on win32
+  assert.equal(resolveLocalFilePath('file:///C:/Users/dev/notes.md', { platform: 'win32' }), 'C:\\Users\\dev\\notes.md');
+  assert.equal(resolveLocalFilePath('file://localhost/C:/Users/dev/notes.md', { platform: 'win32' }), 'C:\\Users\\dev\\notes.md');
+  assert.equal(resolveLocalFilePath('file://///192.168.1.10/share/shot.png', { platform: 'win32' }), '\\\\192.168.1.10\\share\\shot.png');
+  assert.equal(resolveLocalFilePath('file:///\\192.168.1.10/share/shot.png', { platform: 'win32' }), '\\\\192.168.1.10\\share\\shot.png');
+});
+
+test('macOS relaunch passes appName via env to prevent shell injection and omits proxy credentials from open --env argv', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-relaunch-mac-sec-'));
+  try {
+    const trickyAppName = "Antigravity'$(id);uname'";
+    const appBundle = join(root, `${trickyAppName}.app`);
+    const binDir = join(appBundle, 'Contents', 'Resources', 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const lsExe = join(binDir, 'language_server');
+    writeFileSync(lsExe, '');
+
+    const spawned = [];
+    const res = scheduleRelaunchWithDebugPort({
+      dataDir: join(root, 'data'),
+      home: root,
+      platform: 'darwin',
+      env: { ANTIGRAVITY_AGENTAPI_EXE: lsExe },
+      proxy: {
+        enabled: true,
+        url: 'http://alice:s3cr3tPass@127.0.0.1:7897',
+        bypass: '10.0.0.0/8',
+        forceHttp1: true
+      },
+      spawnProcess(cmd, args, opts) { spawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+
+    assert.equal(res.scheduled, true);
+    assert.equal(res.proxyActive, true);
+    assert.equal(spawned.length, 1);
+
+    const script = spawned[0].args[1];
+    const env = spawned[0].opts.env;
+
+    // 1. appName is passed through env and read via AppleScript system attribute, never interpolated into sh -c
+    assert.equal(env.AGY_RELAUNCH_APP_NAME, trickyAppName);
+    assert.ok(script.includes('system attribute "AGY_RELAUNCH_APP_NAME"'));
+    assert.ok(script.includes('unset AGY_RELAUNCH_TARGET AGY_RELAUNCH_APP_NAME'));
+    assert.equal(script.includes('$(id)'), false);
+    assert.equal(script.includes('uname'), false);
+
+    // 2. Proxy credentials stay in exported env vars and are NOT passed to /usr/bin/open --env argv
+    assert.equal(env.AGY_PROXY_URL, 'http://alice:s3cr3tPass@127.0.0.1:7897');
+    assert.ok(script.includes('export HTTP_PROXY="$p_url"'));
+    assert.equal(script.includes('--env "HTTP_PROXY=$p_url"'), false);
+    assert.equal(script.includes('--env "HTTPS_PROXY=$p_url"'), false);
+    assert.equal(script.includes('--env "AGY_POWERTOOLS_PROXY_SPEC=$p_spec"'), false);
+    assert.equal(script.includes('s3cr3tPass'), false);
+    assert.ok(script.includes('--env "NO_PROXY=$p_bypass"'));
+    assert.ok(script.includes('--env "GODEBUG=http2client=0"'));
+
+    if (process.platform !== 'win32') {
+      const check = spawnSync('sh', ['-n', '-c', script], { encoding: 'utf8' });
+      assert.equal(check.status, 0, check.stderr);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('restoreLaunchers rejects home itself, sibling prefix collisions, wrong filenames, and symlinks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-restore-sec-'));
+  try {
+    const home = join(root, 'alice');
+    const siblingHome = join(root, 'alice2');
+    const dataDir = join(root, 'data');
+    mkdirSync(join(home, 'Applications', 'Other.app'), { recursive: true });
+    mkdirSync(join(home, '.local', 'share', 'applications'), { recursive: true });
+    mkdirSync(join(siblingHome, 'Applications', 'Antigravity (Max).app'), { recursive: true });
+    mkdirSync(join(siblingHome, '.local', 'share', 'applications'), { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+
+    const homeKeepFile = join(home, 'important.txt');
+    writeFileSync(homeKeepFile, 'keep', 'utf8');
+    const otherDesktop = join(home, '.local', 'share', 'applications', 'other.desktop');
+    writeFileSync(otherDesktop, '[Desktop Entry]\nExec=/opt/Antigravity/antigravity --remote-debugging-port=0\n', 'utf8');
+    const siblingDesktop = join(siblingHome, '.local', 'share', 'applications', 'antigravity.desktop');
+    writeFileSync(siblingDesktop, '[Desktop Entry]\nExec=/opt/Antigravity/antigravity --remote-debugging-port=0\n', 'utf8');
+
+    let macSymlink = '';
+    let linuxSymlink = '';
+    const externalTargetDir = join(root, 'external-app');
+    const externalTargetFile = join(root, 'external.desktop');
+    mkdirSync(externalTargetDir, { recursive: true });
+    writeFileSync(externalTargetFile, '[Desktop Entry]\nExec=/opt/Antigravity/antigravity --remote-debugging-port=0\n', 'utf8');
+    if (process.platform !== 'win32') {
+      macSymlink = join(home, 'Applications', 'Antigravity (Max).app');
+      symlinkSync(externalTargetDir, macSymlink);
+      linuxSymlink = join(home, '.local', 'share', 'applications', 'antigravity.desktop');
+      symlinkSync(externalTargetFile, linuxSymlink);
+    }
+
+    // Tampered macOS launcher-state.json
+    writeFileSync(join(dataDir, 'launcher-state.json'), JSON.stringify({
+      shortcuts: [],
+      desktopEntries: [],
+      macApps: [
+        home,
+        join(siblingHome, 'Applications', 'Antigravity (Max).app'),
+        join(home, 'Applications', 'Other.app'),
+        ...(macSymlink ? [macSymlink] : [])
+      ]
+    }));
+    const macRes = restoreLaunchers({ home, dataDir, platform: 'darwin', sandbox: true });
+    assert.deepEqual(macRes.restored, []);
+    assert.equal(existsSync(home), true);
+    assert.equal(existsSync(homeKeepFile), true);
+    assert.equal(existsSync(join(siblingHome, 'Applications', 'Antigravity (Max).app')), true);
+    assert.equal(existsSync(join(home, 'Applications', 'Other.app')), true);
+    assert.equal(existsSync(externalTargetDir), true);
+
+    // Tampered Linux launcher-state.json
+    writeFileSync(join(dataDir, 'launcher-state.json'), JSON.stringify({
+      shortcuts: [],
+      desktopEntries: [
+        { path: home, mode: 'created' },
+        { path: homeKeepFile, mode: 'created' },
+        { path: otherDesktop, mode: 'created' },
+        { path: siblingDesktop, mode: 'created' },
+        { path: siblingDesktop, mode: 'patched' },
+        ...(linuxSymlink ? [{ path: linuxSymlink, mode: 'created' }, { path: linuxSymlink, mode: 'patched' }] : [])
+      ],
+      macApps: []
+    }));
+    const linuxRes = restoreLaunchers({ home, dataDir, platform: 'linux', sandbox: true });
+    assert.deepEqual(linuxRes.restored, []);
+    assert.equal(existsSync(home), true);
+    assert.equal(existsSync(homeKeepFile), true);
+    assert.equal(existsSync(otherDesktop), true);
+    assert.equal(existsSync(siblingDesktop), true);
+    assert.ok(readFileSync(siblingDesktop, 'utf8').includes('--remote-debugging-port=0'));
+    assert.equal(existsSync(externalTargetFile), true);
+    assert.ok(readFileSync(externalTargetFile, 'utf8').includes('--remote-debugging-port=0'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
