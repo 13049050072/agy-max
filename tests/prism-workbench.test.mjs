@@ -1091,6 +1091,31 @@ test('Code Block >= 48 lines folds/expands manually with scrollTop anchor compen
   assert.equal(rpcCalls[1].method, 'file.openEditor');
   assert.equal(rpcCalls[1].payload.uri, 'file:///ws/src/app.mjs');
 
+  // Inline Step Diff preserves file:// URI scheme (Windows drive & percent-encoded spaces/CJK) while stripping #hash/?query
+  const winDiffRow = document.createElement('div');
+  winDiffRow.setAttribute('data-testid', 'file-change-row');
+  winDiffRow.setAttribute('data-uri', 'file:///C:/repo/my%20app/%E4%B8%AD%E6%96%87.js?v=1#L12');
+  convView.appendChild(winDiffRow);
+  const posixDiffRow = document.createElement('div');
+  posixDiffRow.setAttribute('data-testid', 'file-change-row');
+  posixDiffRow.setAttribute('data-uri', 'file:///Users/dev/my%20app/%E4%B8%AD%E6%96%87.js#L5');
+  convView.appendChild(posixDiffRow);
+  wb.sync();
+
+  winDiffRow.querySelector('[data-testid="agy-inline-diff-toggle"]').click();
+  await flush();
+  const winCall = rpcCalls.at(-1);
+  assert.equal(winCall.method, 'diff.inline');
+  assert.equal(winCall.payload.path, 'file:///C:/repo/my%20app/%E4%B8%AD%E6%96%87.js');
+  assert.equal(winDiffRow.nextSibling.querySelector('.agy-inline-diff-path').textContent, 'C:/repo/my app/中文.js');
+
+  posixDiffRow.querySelector('[data-testid="agy-inline-diff-toggle"]').click();
+  await flush();
+  const posixCall = rpcCalls.at(-1);
+  assert.equal(posixCall.method, 'diff.inline');
+  assert.equal(posixCall.payload.path, 'file:///Users/dev/my%20app/%E4%B8%AD%E6%96%87.js');
+  assert.equal(posixDiffRow.nextSibling.querySelector('.agy-inline-diff-path').textContent, '/Users/dev/my app/中文.js');
+
   wb.dispose();
   assert.equal(longHeader.querySelector('[data-testid="agy-code-fold-btn"]'), null);
   assert.equal(convView.querySelector('[data-testid="agy-inline-diff-drawer"]'), null);

@@ -15,7 +15,7 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createOmniGateway, resolveSafePreviewPath } from '../lib/omni-gateway.mjs';
+import { createOmniGateway, resolveSafeDiffPath, resolveSafePreviewPath } from '../lib/omni-gateway.mjs';
 
 function makeTempDir(prefix = 'agy-omni-test-') {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -302,8 +302,10 @@ test('inlineDiff enforces --no-optional-locks and --literal-pathspecs, handles t
   mkdirSync(repoDir, { recursive: true });
 
   const observedArgs = [];
+  const observedEnvs = [];
   const trackingExecGit = (cmd, args, opts, cb) => {
     observedArgs.push(args);
+    observedEnvs.push(opts?.env);
     return execFile(cmd, args, opts, cb);
   };
 
@@ -371,13 +373,71 @@ test('inlineDiff enforces --no-optional-locks and --literal-pathspecs, handles t
 
     // Verify safety flags on every git invocation
     assert.ok(observedArgs.length > 0);
-    assert.ok(observedArgs.every(args => args[0] === '--no-optional-locks' && args[1] === '--literal-pathspecs'));
+    assert.ok(observedArgs.every(args =>
+      args[0] === '--no-optional-locks' &&
+      args[1] === '--literal-pathspecs' &&
+      args.includes('core.fsmonitor=false') &&
+      args.includes('core.untrackedCache=false') &&
+      args.includes('core.sshCommand=false') &&
+      args.includes('diff.external=') &&
+      args.includes('core.pager=cat')
+    ));
+    assert.ok(observedEnvs.every(env => env?.GIT_TERMINAL_PROMPT === '0'));
+    assert.ok(observedArgs.filter(a => a.includes('diff')).every(a =>
+      a.includes('--no-ext-diff') && a.includes('--no-textconv') && a.includes('--ignore-submodules=all')
+    ));
+
+    // Malicious core.fsmonitor must never execute
+    const fsmonMarker = join(dir, 'omni-fsmonitor-pwned.txt');
+    git('config', 'core.fsmonitor', `node -e "require('fs').writeFileSync(${JSON.stringify(fsmonMarker)}, 'pwned')"`);
+    const safeAfterFsmon = await gateway.inlineDiff({ workspaceUri, path: 'app.js' });
+    assert.equal(safeAfterFsmon.ok, true);
+    assert.equal(existsSync(fsmonMarker), false);
 
     // Reject path traversal outside repo
     await assert.rejects(() => gateway.inlineDiff({ workspaceUri, path: '../outside.txt' }), /超出/);
     await assert.rejects(() => gateway.inlineDiff({ workspaceUri, path: '/etc/passwd' }), /超出/);
+    await assert.rejects(() => gateway.inlineDiff({ workspaceUri, path: '.git/config' }), /超出/);
   } finally {
     await gateway.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveSafeDiffPath handles percent-encoded URIs, deleted nested files, and rejects symlinks/.git/sensitive paths', () => {
+  const dir = makeTempDir('agy-safe-diff-path-');
+  const root = join(dir, 'repo');
+  const sub = join(root, 'my app');
+  mkdirSync(sub, { recursive: true });
+  const cjkFile = join(sub, '中文 文件.txt');
+  writeFileSync(cjkFile, 'ok\n');
+  const fakeHome = join(dir, 'home');
+  mkdirSync(fakeHome, { recursive: true });
+
+  try {
+    const rootReal = resolveSafePreviewPath(cjkFile, { home: fakeHome }).realPath.replace(/[\\/]my app[\\/][^\\/]+$/, '');
+
+    // Percent-encoded file:// URI with #hash and ?query
+    const cjkUri = `${pathToFileURL(cjkFile).href}?v=1#L3`;
+    const existing = resolveSafeDiffPath(rootReal, cjkUri, { home: fakeHome });
+    assert.equal(existing.exists, true);
+    assert.equal(existing.relPath, 'my app/中文 文件.txt');
+
+    // Deleted file in existing and non-existent nested subdirectories
+    const deletedNested = resolveSafeDiffPath(rootReal, 'deleted-dir/nested/old.js', { home: fakeHome });
+    assert.equal(deletedNested.exists, false);
+    assert.equal(deletedNested.relPath, 'deleted-dir/nested/old.js');
+
+    // Reject .git and sensitive deleted files
+    assert.throws(() => resolveSafeDiffPath(rootReal, '.git/HEAD', { home: fakeHome }));
+    assert.throws(() => resolveSafeDiffPath(rootReal, '.env', { home: fakeHome }));
+    assert.throws(() => resolveSafeDiffPath(rootReal, 'sub/.env.local', { home: fakeHome }));
+
+    if (process.platform !== 'win32') {
+      symlinkSync(dir, join(root, 'escape-dir'));
+      assert.throws(() => resolveSafeDiffPath(rootReal, 'escape-dir/missing.txt', { home: fakeHome }));
+    }
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

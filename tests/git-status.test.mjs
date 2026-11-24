@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -75,5 +75,108 @@ test('readGitStatus and readGitFileDiff use --no-optional-locks, count untracked
     await assert.rejects(() => readGitFileDiff(uri, '/etc/passwd'), /无效/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readGitStatus and readGitFileDiff enforce Git hardening flags, block fsmonitor/local filters, reject symlinks/.git, verify untracked status, and support deleted files', async () => {
+  const temp = mkdtempSync(join(tmpdir(), 'agy-git-hardening-'));
+  const dir = join(temp, 'repo');
+  mkdirSync(dir, { recursive: true });
+  try {
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const init = git('init', '-b', 'main');
+    if (init.status !== 0) git('init');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    git('config', 'commit.gpgsign', 'false');
+
+    writeFileSync(join(dir, '.gitignore'), 'ignored-secret.txt\n');
+    writeFileSync(join(dir, 'tracked.txt'), 'tracked-v1\n');
+    writeFileSync(join(dir, 'to-delete.txt'), 'gone-line-1\ngone-line-2\n');
+    git('add', '.gitignore', 'tracked.txt', 'to-delete.txt');
+    git('commit', '-m', 'init');
+
+    writeFileSync(join(dir, 'tracked.txt'), 'tracked-v2\n');
+    writeFileSync(join(dir, 'ignored-secret.txt'), 'SUPER_SECRET_DO_NOT_LEAK\n');
+    unlinkSync(join(dir, 'to-delete.txt'));
+    writeFileSync(join(temp, 'outside-secret.txt'), 'OUTSIDE_SECRET_CONTENT\nline2\nline3\n');
+
+    if (process.platform !== 'win32') {
+      symlinkSync(join(temp, 'outside-secret.txt'), join(dir, 'evil-link.txt'));
+      symlinkSync(temp, join(dir, 'evil-dir-link'));
+    }
+
+    // Configure malicious core.fsmonitor that would create a marker file if ever executed
+    const markerFile = join(temp, 'fsmonitor-pwned.txt');
+    git('config', 'core.fsmonitor', `node -e "require('fs').writeFileSync(${JSON.stringify(markerFile)}, 'pwned')"`);
+
+    const observed = [];
+    const trackingExec = (cmd, args, opts, cb) => {
+      observed.push({ args, env: opts?.env });
+      return execFile(cmd, args, opts, cb);
+    };
+
+    const uri = pathToFileURL(dir).href;
+    const status = await readGitStatus(uri, { force: true, execGit: trackingExec });
+    assert.equal(status.isRepo, true);
+    assert.equal(existsSync(markerFile), false, 'core.fsmonitor must never execute during readGitStatus');
+
+    // Symlink must not be followed to count lines of outside file
+    if (process.platform !== 'win32') {
+      const linkEntry = status.files.find(f => f.path === 'evil-link.txt');
+      if (linkEntry) assert.equal(linkEntry.additions, 0);
+    }
+
+    // Deleted tracked file diff still works
+    const delDiff = await readGitFileDiff(uri, 'to-delete.txt', { execGit: trackingExec });
+    assert.equal(delDiff.ok, true);
+    assert.match(delDiff.patch, /-gone-line-1/);
+
+    // Spoofed status='?' must NOT dump gitignored or tracked files directly via openSync
+    const spoofedIgnored = await readGitFileDiff(uri, 'ignored-secret.txt', { status: '?', execGit: trackingExec });
+    assert.equal(spoofedIgnored.ok, true);
+    assert.equal(spoofedIgnored.patch, '');
+    assert.equal(spoofedIgnored.patch.includes('SUPER_SECRET_DO_NOT_LEAK'), false);
+
+    const spoofedTracked = await readGitFileDiff(uri, 'tracked.txt', { status: '?', execGit: trackingExec });
+    assert.equal(spoofedTracked.ok, true);
+    assert.match(spoofedTracked.patch, /-tracked-v1/);
+    assert.match(spoofedTracked.patch, /\+tracked-v2/);
+
+    // .git subpaths and symlinks are always rejected (even with spoofed status='?')
+    await assert.rejects(() => readGitFileDiff(uri, '.git/config', { status: '?', execGit: trackingExec }), /\.git/);
+    if (process.platform !== 'win32') {
+      await assert.rejects(() => readGitFileDiff(uri, 'evil-link.txt', { status: '?', execGit: trackingExec }), /符号链接/);
+      await assert.rejects(() => readGitFileDiff(uri, 'evil-dir-link/outside-secret.txt', { status: '?', execGit: trackingExec }), /符号链接/);
+    }
+
+    assert.equal(existsSync(markerFile), false, 'core.fsmonitor must never execute during readGitFileDiff');
+
+    // Verify all hardening flags and env on every git invocation
+    assert.ok(observed.length > 0);
+    for (const { args, env } of observed) {
+      assert.equal(args[0], '--no-optional-locks');
+      assert.ok(args.includes('--literal-pathspecs'));
+      assert.ok(args.includes('core.fsmonitor=false'));
+      assert.ok(args.includes('core.untrackedCache=false'));
+      assert.ok(args.includes('core.sshCommand=false'));
+      assert.ok(args.includes('diff.external='));
+      assert.ok(args.includes('core.pager=cat'));
+      assert.equal(env?.GIT_TERMINAL_PROMPT, '0');
+      const diffIdx = args.indexOf('diff');
+      if (diffIdx >= 0) {
+        assert.ok(args.includes('--no-ext-diff'));
+        assert.ok(args.includes('--no-textconv'));
+        assert.ok(args.includes('--ignore-submodules=all'));
+      }
+    }
+
+    // Local filter.*.clean must block both readGitStatus and readGitFileDiff
+    git('config', 'filter.evil.clean', 'cat');
+    const blockedStatus = await readGitStatus(uri, { force: true, execGit: trackingExec });
+    assert.equal(blockedStatus.isRepo, false);
+    await assert.rejects(() => readGitFileDiff(uri, 'tracked.txt', { execGit: trackingExec }), /过滤器/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
   }
 });
