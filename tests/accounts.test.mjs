@@ -1054,3 +1054,116 @@ test('createAccountsStore blocks cross-account credential clobbering on email mi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('switchAccount aborts before restoreToActive when backing up current active credentials fails without a matching verified backup', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-accounts-backup-guard-'));
+  let clock = 1_796_000_000_000;
+  let relaunches = 0;
+  let restoreCalls = 0;
+  let failSaveMode = '';
+  let lockActiveRead = false;
+  const makeToken = (email, rev) => JSON.stringify({
+    token: { access_token: `acc-${email}-${rev}`, refresh_token: `rt-${email}` },
+    id_token_email: email
+  });
+  const emailOf = raw => {
+    try { return JSON.parse(raw).id_token_email.toLowerCase(); } catch { return ''; }
+  };
+  const hashOf = v => `H_${String(v)}`;
+  const slots = new Map([['gemini:antigravity', makeToken('alpha@example.com', 1)]]);
+  const vault = {
+    supported: true,
+    has: t => slots.has(t),
+    inspect(t) {
+      if (t === 'gemini:antigravity' && lockActiveRead) return { exists: false, hash: '' };
+      if (!slots.has(t)) return { exists: false, hash: '' };
+      const raw = slots.get(t);
+      const email = emailOf(raw);
+      return { exists: true, hash: hashOf(raw), ...(email ? { email } : {}) };
+    },
+    saveActiveTo(id, { expectedEmail = '' } = {}) {
+      if (failSaveMode) return { ok: false, error: failSaveMode };
+      if (!slots.has('gemini:antigravity')) return { ok: false, error: 'missing active' };
+      const raw = slots.get('gemini:antigravity');
+      const actualEmail = emailOf(raw);
+      const expected = String(expectedEmail || '').trim().toLowerCase();
+      if (expected && actualEmail && actualEmail !== expected) {
+        return { ok: false, mismatch: true, actualEmail, expectedEmail: expected, error: 'mismatch' };
+      }
+      slots.set(`agy-powertools:account:${id}`, raw);
+      return { ok: true, bytes: raw.length, hash: hashOf(raw), ...(actualEmail ? { email: actualEmail } : {}) };
+    },
+    restoreToActive(id, { expectedEmail = '' } = {}) {
+      restoreCalls++;
+      const key = `agy-powertools:account:${id}`;
+      if (!slots.has(key)) return { ok: false, error: 'missing saved' };
+      const raw = slots.get(key);
+      const actualEmail = emailOf(raw);
+      const expected = String(expectedEmail || '').trim().toLowerCase();
+      if (expected && actualEmail && actualEmail !== expected) {
+        return { ok: false, mismatch: true, actualEmail, expectedEmail: expected, error: 'mismatch' };
+      }
+      slots.set('gemini:antigravity', raw);
+      return { ok: true, bytes: raw.length, hash: hashOf(raw), ...(actualEmail ? { email: actualEmail } : {}) };
+    },
+    hasSaved: id => slots.has(`agy-powertools:account:${id}`),
+    inspectSaved(id) { return this.inspect(`agy-powertools:account:${id}`); },
+    inspectActive() { return this.inspect('gemini:antigravity'); },
+    removeSaved: id => { slots.delete(`agy-powertools:account:${id}`); return { ok: true }; }
+  };
+
+  try {
+    const store = createAccountsStore(dir, {
+      now: () => clock,
+      vault,
+      relaunch: () => { relaunches++; return { scheduled: true }; }
+    });
+
+    const s1 = store.syncActive({ email: 'alpha@example.com', name: 'Alpha' });
+    const alphaId = s1.activeId;
+    store.prepareAdd();
+    slots.set('gemini:antigravity', makeToken('beta@example.com', 1));
+    clock += 10_000;
+    const s2 = store.syncActive({ email: 'beta@example.com', name: 'Beta' });
+    const betaId = s2.activeId;
+
+    // 1. Active beta token rotated (newer than saved backup) and saveActiveTo fails transiently -> MUST abort before restoreToActive
+    const rotatedBeta = makeToken('beta@example.com', 2);
+    slots.set('gemini:antigravity', rotatedBeta);
+    failSaveMode = 'keychain write failed';
+    assert.throws(() => store.switchAccount(alphaId), /无法保存当前账号凭证.*keychain write failed/);
+    assert.equal(restoreCalls, 0);
+    assert.equal(relaunches, 0);
+    assert.equal(slots.get('gemini:antigravity'), rotatedBeta);
+    assert.equal(store.list().activeId, betaId);
+
+    // 2. Keychain completely locked (both saveActiveTo and inspectActive fail) -> MUST abort before restoreToActive
+    lockActiveRead = true;
+    failSaveMode = 'keychain locked';
+    assert.throws(() => store.switchAccount(alphaId), /无法保存当前账号凭证.*keychain locked/);
+    assert.equal(restoreCalls, 0);
+    assert.equal(relaunches, 0);
+    assert.equal(slots.get('gemini:antigravity'), rotatedBeta);
+    assert.equal(store.list().activeId, betaId);
+
+    // 3. Current account has no saved backup at all and saveActiveTo fails -> MUST abort
+    lockActiveRead = false;
+    slots.delete(`agy-powertools:account:${betaId}`);
+    failSaveMode = 'transient I/O error';
+    assert.throws(() => store.switchAccount(alphaId), /无法保存当前账号凭证.*transient I\/O error/);
+    assert.equal(restoreCalls, 0);
+    assert.equal(slots.get('gemini:antigravity'), rotatedBeta);
+
+    // 4. When active credential ALREADY matches current's verified saved backup, a transient save write error still allows safe switch
+    slots.set(`agy-powertools:account:${betaId}`, rotatedBeta);
+    failSaveMode = 'readonly backup slot';
+    const safeSwitch = store.switchAccount(alphaId);
+    assert.equal(safeSwitch.ok, true);
+    assert.equal(restoreCalls, 1);
+    assert.equal(relaunches, 1);
+    assert.equal(slots.get('gemini:antigravity'), makeToken('alpha@example.com', 1));
+    assert.equal(safeSwitch.activeId, alphaId);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
