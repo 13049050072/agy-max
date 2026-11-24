@@ -5,6 +5,7 @@ import {
   ACTIVE_TARGET,
   ACTIVE_USERNAME,
   createCredentialVault,
+  decodeDarwinKeychainSecret,
   extractCredentialEmail,
   vaultTargetFor
 } from '../lib/credential-vault.mjs';
@@ -222,4 +223,88 @@ test('Windows PowerShell WIN32_SCRIPT compiles Add-Type and extracts id_token_em
   assert.equal(res.status, 0, res.stderr || res.error?.message || 'powershell failed');
   const line = String(res.stdout || '').trim().split(/\r?\n/).filter(Boolean).at(-1) || '';
   assert.equal(line, 'alpha@example.com|real@example.com|beta@example.com|');
+});
+
+test('macOS credential vault decodes security -w hex output for non-ASCII/multiline secrets without double-hex corruption', () => {
+  const utf8MultilineCred = JSON.stringify({
+    token: { access_token: 'ya29.abc', refresh_token: '1//rt-alpha' },
+    display_name: '张三 · José',
+    id_token_email: 'Alice@Example.com'
+  }, null, 2) + '\n';
+  const expectedBuf = Buffer.from(utf8MultilineCred, 'utf8');
+  const singleHex = expectedBuf.toString('hex');
+
+  // Direct helper unit checks
+  assert.deepEqual(decodeDarwinKeychainSecret(Buffer.from(singleHex + '\n', 'utf8')), expectedBuf);
+  assert.equal(decodeDarwinKeychainSecret(Buffer.from('plain-ascii-token\n', 'utf8')).toString('utf8'), 'plain-ascii-token');
+  // Literal ASCII lowercase hex strings must NOT be mis-decoded as raw bytes
+  assert.equal(decodeDarwinKeychainSecret(Buffer.from('deadbeef0123456789abcdef01234567\n', 'utf8')).toString('utf8'), 'deadbeef0123456789abcdef01234567');
+  assert.equal(decodeDarwinKeychainSecret(Buffer.from('61626364\n', 'utf8')).toString('utf8'), '61626364');
+
+  // Simulate real macOS `/usr/bin/security` behavior:
+  // - `add-generic-password ... -X <hex>` stores decoded raw bytes
+  // - `find-generic-password ... -w` emits raw bytes if all bytes are 0x20..0x7e, otherwise lowercase hex
+  const keychain = new Map([['gemini::antigravity', Buffer.from(expectedBuf)]]);
+  const writeCommands = [];
+  const vault = createCredentialVault({
+    platform: 'darwin',
+    runSpawn(cmd, args, opts) {
+      assert.equal(cmd, '/usr/bin/security');
+      if (args[0] === 'find-generic-password') {
+        const service = args[args.indexOf('-s') + 1];
+        const account = args[args.indexOf('-a') + 1];
+        const key = `${service}::${account}`;
+        if (!keychain.has(key)) return { status: 44, stdout: Buffer.alloc(0), stderr: 'could not be found' };
+        if (!args.includes('-w')) return { status: 0, stdout: Buffer.alloc(0), stderr: '' };
+        const raw = keychain.get(key);
+        const allPrintableAscii = raw.every(b => b >= 0x20 && b <= 0x7e);
+        const out = allPrintableAscii ? Buffer.concat([raw, Buffer.from('\n')]) : Buffer.from(raw.toString('hex') + '\n', 'utf8');
+        return { status: 0, stdout: out, stderr: '' };
+      }
+      if (args[0] === '-i') {
+        const line = String(opts?.input || '').trim();
+        writeCommands.push(line);
+        const m = line.match(/^add-generic-password -U -s "([^"]+)" -a "([^"]+)" -X ([0-9a-f]+)$/);
+        assert.ok(m, `unexpected security -i command: ${line}`);
+        keychain.set(`${m[1]}::${m[2]}`, Buffer.from(m[3], 'hex'));
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'unexpected' };
+    }
+  });
+
+  // 1. inspectActive decodes hex, extracts id_token_email, and hashes original bytes
+  const activeInfo = vault.inspectActive();
+  assert.equal(activeInfo.exists, true);
+  assert.equal(activeInfo.email, 'alice@example.com');
+
+  // 2. Mismatch guard still works when active secret is hex-encoded by security -w
+  const blocked = vault.saveActiveTo('acct-other', { expectedEmail: 'other@example.com' });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.mismatch, true);
+  assert.equal(blocked.actualEmail, 'alice@example.com');
+  assert.equal(writeCommands.length, 0);
+
+  // 3. saveActiveTo writes single hex (NOT double hex) and returns exact byte count & hash
+  const saved = vault.saveActiveTo('acct-alice', { expectedEmail: 'alice@example.com' });
+  assert.equal(saved.ok, true);
+  assert.equal(saved.bytes, expectedBuf.length);
+  assert.equal(saved.hash, activeInfo.hash);
+  assert.equal(saved.email, 'alice@example.com');
+  assert.ok(writeCommands[0].endsWith(` -X ${singleHex}`), 'must write single-encoded hex, not double-encoded');
+  assert.deepEqual(keychain.get('agy-powertools-account::acct-alice'), expectedBuf);
+
+  // 4. inspectSaved & restoreToActive round-trip preserves exact bytes without double-hex corruption
+  const savedInfo = vault.inspectSaved('acct-alice');
+  assert.equal(savedInfo.exists, true);
+  assert.equal(savedInfo.hash, activeInfo.hash);
+  assert.equal(savedInfo.email, 'alice@example.com');
+
+  keychain.set('gemini::antigravity', Buffer.from('{"id_token_email":"beta@example.com"}', 'utf8'));
+  const restored = vault.restoreToActive('acct-alice', { expectedEmail: 'alice@example.com' });
+  assert.equal(restored.ok, true);
+  assert.equal(restored.bytes, expectedBuf.length);
+  assert.equal(restored.hash, activeInfo.hash);
+  assert.equal(restored.email, 'alice@example.com');
+  assert.deepEqual(keychain.get('gemini::antigravity'), expectedBuf);
 });
