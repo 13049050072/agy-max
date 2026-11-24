@@ -1,6 +1,6 @@
 .research/
 .backups/
 node_modules/
-dist/
+/dist/
 VERIFICATION.md
 scripts/verify-*.mjs
