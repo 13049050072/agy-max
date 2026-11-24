@@ -2,7 +2,7 @@
   <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
   <h1>Antigravity Max (<code>agy-max</code>)</h1>
   <p><strong>All-in-one flagship native workbench for Antigravity 2.0</strong></p>
-  <p>Multilingual UI / Codex-style workflow suite / Prism optics &amp; workbench / Context &amp; usage dashboard / Session branching &amp; inline edit / Multi-account switcher / No-TUN proxy / SSH &amp; WSL2</p>
+  <p>Built-in <code>agy-fast</code> accelerator (toggleable anytime) / Codex-style workflow suite / Prism optics &amp; workbench / Multilingual UI / Context &amp; usage dashboard / Multi-account switcher / No-TUN proxy / SSH &amp; WSL2</p>
   <!-- plugin-badges:start -->
   <p>
     <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
@@ -18,6 +18,7 @@
     <strong>English</strong>
   </p>
   <p>
+    <a href="#credits--open-source-origins">Credits &amp; Origins</a> |
     <a href="#screenshots">Screenshots</a> |
     <a href="#features">Features</a> |
     <a href="#installation">Installation</a> |
@@ -30,7 +31,21 @@
   <img src="docs/images/hero-workspace.png" alt="Antigravity Max workspace" width="100%" />
 </p>
 
-> Attaches non-invasively to Antigravity 2.0 over the local debugging interface without patching installation files or opening external web pages. Installing over `agy-powertools` automatically pauses the legacy plugin and migrates your saved settings and multi-account configuration.
+> **Vision &amp; Open-Source Credits**: `Antigravity Max` is independently maintained as an all-in-one batteries-included workbench for Antigravity 2.0. Its debugging attachment and telemetry foundation are derived from [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools) (MIT), its optical themes and workbench UX draw inspiration from [RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism), and it ships with [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) (MIT) enabled out of the box with a one-click toggle to turn it off anytime. See [Credits &amp; Open-Source Origins](#credits--open-source-origins) below.
+
+---
+
+## Credits &amp; Open-Source Origins
+
+`Antigravity Max` builds openly upon great community projects—thank you to their creators and contributors:
+
+| Upstream Repository | Relationship &amp; Scope | License &amp; Notes |
+| --- | --- | --- |
+| **[WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools)** | **Core foundation**: Local CDP attachment, read-only SQLite/JSONL session telemetry &amp; 53-week dashboard, multilingual base, session branching &amp; inline editing, OS-keyring multi-account switching, no-TUN proxy, and WSL2 bridge | MIT License (installing `agy-max` automatically pauses `agy-powertools` and migrates saved settings &amp; accounts) |
+| **[RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism)** | **Optical &amp; workbench inspiration**: Light/dark optical palettes, scene presets, liquid vial context indicator, reasoning effort slider, code-block folding, inline step diffs, chat folders, and wallpaper/mascot concepts | Clean-room MIT implementation inspired by public feature specs (see [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)) |
+| **[INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)** | **Built-in default accelerator**: Bundles `batch_search`, `apply_edits`, `quick_outline`, `read_slices`, `run_checks`, and `SessionStart` workspace snapshots to cut LLM round trips and token usage | MIT License (enabled by default; toggle off anytime in **Antigravity Max -> Settings -> Conversation enhancements**) |
+
+On top of these foundations, `Antigravity Max` adds an **under-card Git &amp; telemetry status strip, millisecond local + SSH full-text session search (`Cmd+Opt+F`), active-sessions bell &amp; sidebar `Priority` view, persistent `/goal` tracker &amp; live editor drawer, full tool-chain Markdown export, external editor `line:col` jump, and SSH command paste parsing**.
 
 ---
 
@@ -99,6 +114,7 @@
 
 ## Features
 
+- **Built-in `agy-fast` accelerator (on by default, toggleable anytime)**: Automatically deploys and enables bundled `agy-fast` (batched search, symbol outlines, atomic multi-file edits, concurrent checks, and startup snapshots) with zero extra setup; turn it off anytime in `Settings -> Conversation enhancements -> Built-in agy-fast accelerator` while preserving any custom `*.local.md` rules.
 - **Codex-style flagship workflow suite**: Millisecond full-text search across local and SSH transcripts (`Cmd+Opt+F` / `Ctrl+Alt+F` jumping straight to matched turns with one-click code/command copy), an active-sessions bell next to the titlebar conversation picker with a sidebar `Priority` running/unread list, a non-locking composer Git status &amp; read-only Unified Diff pill (`+X / -Y`), a persistent `/goal` bar with a live Goal editor drawer, plus pragmatic coding mode and `/code-review`.
 - **Prism optics and modern workbench**: Four light/dark optical palettes, one-click scene presets (`Native` / `Ultra` / `Focus` / `Eco`), liquid vial context indicator, reasoning effort slider with per-model memory, long code-block folding, inline step Git diffs, hover turn outline, chat folders, pixel mascots, local image/video wallpapers, and sanitized JSON config backup/restore.
 - **Context, speed, and local usage dashboard**: Live context ring (cache reuse, compaction count, Orchestrator per-model bars) and speed dial (`tok/s`, TTFT, model/tool time, estimated session cost) below the composer, paired with the **Antigravity Max** sidebar dashboard (53-week heatmap, per-request log, cache anomaly alerts, and official pricing refresh).
@@ -112,7 +128,7 @@
 
 ## Installation
 
-> Requirements: Antigravity installed and started at least once. Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` installations are automatically paused and migrated seamlessly.
+> Requirements: Antigravity installed and started at least once. Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` setups are migrated seamlessly, and pre-existing standalone `agy-fast` setups are preserved safely.
 
 ### Option 1: Let an Agent install it (recommended)
 
@@ -147,7 +163,7 @@ Restart Antigravity once you finish your current task; **Antigravity Max** will 
 
 ## Configuration
 
-Every setting applies live in **Antigravity Max -> Settings** and saves automatically, with category filters, scene presets, sanitized JSON export/import, and **Restore defaults**.
+Every setting applies live in **Antigravity Max -> Settings** and saves automatically, including category filters, scene presets, the **Built-in `agy-fast` accelerator** switch, sanitized JSON export/import, and **Restore defaults**.
 
 <details>
 <summary><strong>Expand environment variables and paths</strong></summary>
@@ -156,7 +172,8 @@ Every setting applies live in **Antigravity Max -> Settings** and saves automati
 | --- | --- |
 | `ANTIGRAVITY_USER_DATA_DIR` | Custom Antigravity user-data directory for isolated profiles |
 | `ANTIGRAVITY_CDP_PORT_FILE` | Explicit path to `DevToolsActivePort` (also honors `AGY_BROWSER_ACTIVE_PORT_FILE`) |
-| `~/.gemini/config/plugins/agy-max/` | Installed plugin files and runtime scripts |
+| `~/.gemini/config/plugins/agy-max/` | Installed workbench plugin files and bundled assets |
+| `~/.gemini/config/plugins/agy-fast/` | Managed `agy-fast` accelerator plugin directory (removed automatically when toggled off) |
 | `~/.gemini/antigravity/plugin_data/agy-max/` | Saved settings, goals, account metadata, quota samples, and pricing cache |
 
 </details>
@@ -165,17 +182,16 @@ Every setting applies live in **Antigravity Max -> Settings** and saves automati
 
 ## Changelog
 
+### v1.1.0
+- **Built-in `agy-fast` accelerator (on by default, toggleable anytime)**: Bundled [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) (`v0.3.0`) out of the box and added a `Built-in agy-fast accelerator` toggle under `Settings -> Conversation enhancements` to turn it off or back on anytime while preserving custom `*.local.md` rules and standalone installs.
+- **Prominent open-source credits**: Added dedicated attribution tables and callouts across `README.md`, `README_EN.md`, [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt), and `Settings -> About` crediting [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools), [RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism), and [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast).
+
 ### v1.0.0
-- **Initial standalone release (`Antigravity Max` / `agy-max`)**: All-in-one workbench edition with automatic takeover and seamless migration of settings, goals, and OS-keyring multi-account records from `agy-powertools`.
-- **Under-card composer status strip**: Unified Git status pill and session context/speed telemetry beneath the composer card.
-- **Codex-style workflow suite**: Local &amp; SSH full-text session search (`Cmd+Opt+F` / `Ctrl+Alt+F`), active-sessions bell &amp; sidebar `Priority` view, read-only Git diff preview pill, persistent `/goal` tracker &amp; editor drawer, full Markdown transcript copy, and external editor `line:col` launch.
-- **Prism optics &amp; workbench suite**: Optical palettes, scene presets, conversation aura, liquid vial indicator, reasoning effort slider, code-block folding, inline step diffs, chat folders, local wallpapers/mascots, and sanitized settings backup/restore.
-- **SSH command paste &amp; cross-platform foundation**: Auto-parse `ssh -p 2222 user@host` on paste, multilingual UI, 53-week local usage dashboard, multi-account vault switcher, no-TUN proxy, and SSH / WSL2 support.
+- **Initial standalone release (`Antigravity Max` / `agy-max`)**: All-in-one workbench edition with automatic takeover and seamless migration of settings, goals, and OS-keyring multi-account records from `agy-powertools`, under-card Git/telemetry strip, Codex workflow suite, and Prism optical workbench.
 
 ---
 
-## License &amp; Acknowledgments
+## License &amp; Links
 
-- **License**: [MIT License](LICENSE)
-- **Acknowledgments**: Built upon the MIT-licensed debugging attachment and telemetry foundation from [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools); optical workbench specification notes in [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md); date-range calendar notices in [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt).
+- **License**: [MIT License](LICENSE) (third-party notices in [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt))
 - **Issues**: [GitHub Issues](https://github.com/wangbingnan136/agy-max/issues) (please include OS, Antigravity version, and plugin version)

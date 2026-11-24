@@ -2,7 +2,7 @@
   <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
   <h1>Antigravity Max (<code>agy-max</code>)</h1>
   <p><strong>Antigravity 2.0 满血原生全能工作台增强插件</strong></p>
-  <p>多语言汉化 / 类 Codex 全套效率工作流 / Prism 光学美化与工作台 / 上下文与用量看板 / 会话分支与编辑 / 多账号切换 / 免 TUN 独立代理 / SSH 与 WSL2 支持</p>
+  <p>默认内置 <code>agy-fast</code> 加速引擎（可随时关闭） / 类 Codex 全套工作流 / Prism 光学美化与工作台 / 多语言汉化 / 上下文与用量看板 / 多账号切换 / 免 TUN 代理 / SSH 与 WSL2 支持</p>
   <!-- plugin-badges:start -->
   <p>
     <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
@@ -18,6 +18,7 @@
     <a href="README_EN.md">English</a>
   </p>
   <p>
+    <a href="#开源来源与致谢">开源来源与致谢</a> |
     <a href="#界面预览">界面预览</a> |
     <a href="#主要功能">主要功能</a> |
     <a href="#安装与卸载">安装与卸载</a> |
@@ -30,7 +31,21 @@
   <img src="docs/images/hero-workspace.png" alt="Antigravity Max 使用界面" width="100%" />
 </p>
 
-> 通过本机调试接口零侵入挂载在 Antigravity 2.0 内部，不修改客户端安装包，不打开外部网页；从 `agy-powertools` 切换过来会自动停用旧插件并无损继承原有设置与多账号配置。
+> **设计定位与开源来源说明**：`Antigravity Max` 面向追求「开箱即满血」体验的重度开发者独立维护。本项目底层调试挂载与遥测底座衍生自 [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools)（MIT），光学主题与工作台交互设计借鉴自 [RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism)，并默认内置集成了 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（MIT，可在设置页一键关闭）。完整归属见下方 [开源来源与致谢](#开源来源与致谢)。
+
+---
+
+## 开源来源与致谢
+
+本项目站在社区优秀开源项目肩膀上独立演进，特此向原作者们致谢：
+
+| 来源仓库 | 关系与借鉴内容 | 许可与说明 |
+| --- | --- | --- |
+| **[WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools)** | **核心底座衍生**：本机 CDP 零侵入调试挂载、本地 SQLite/JSONL 会话遥测与 53 周看板、多语言汉化底座、会话分支与原位编辑、系统凭据库多账号切换、免 TUN 独立代理及 WSL2 桥接 | MIT License（安装 `agy-max` 时自动停用旧版并无损继承原有设置与账号） |
+| **[RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism)** | **交互与光学规格借鉴**：深浅光学配色体系、场景一键预设、水波试管上下文指示器、推理档位滑杆、长代码折叠、行内步骤 Diff、会话文件夹与本地壁纸/桌宠理念 | 基于公开功能规格独立净室重实现（详见 [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)） |
+| **[INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)** | **默认内置加速套件**：内置打包 `batch_search`、`apply_edits`、`quick_outline`、`read_slices`、`run_checks` 与 `SessionStart` 启动快照，大幅减少 Agent 工具往返轮次与 Token 消耗 | MIT License（默认自动部署启用，可在 **Antigravity Max -> 设置 -> 会话增强** 随时一键关闭） |
+
+在此基础上，`Antigravity Max` 进一步自研整合了**输入框下置 Git 与遥测状态栏、本地 + SSH 历史全文搜索（`⌘+⌥+F`）、运行中会话铃铛与侧栏「优先事项」、`/goal` 常驻目标栏与实时编辑抽屉、完整工具链 Markdown 复制、外部编辑器行列直达及 SSH 连接命令粘贴解析**等全套类 Codex 重度工程流特性。
 
 ---
 
@@ -99,6 +114,7 @@
 
 ## 主要功能
 
+- **默认内置 `agy-fast` 极速引擎（可随时关闭）**：无需单独安装，装好 `Antigravity Max` 即自动部署并启用内置 `agy-fast`（提供并发批量搜索、符号大纲、多文件原子修改与启动快照）；不想使用时可在「设置 -> 会话增强 -> 内置 agy-fast 加速引擎」一键关闭，保留用户自定义 `*.local.md` 规则不丢失。
 - **类 Codex 旗舰工作流套件**：毫秒级本地与 SSH 历史会话全文搜索（`⌘+⌥+F` / `Ctrl+Alt+F` 直达匹配轮次并一键复制代码或命令）、顶部搜索会话按钮右侧运行中会话铃铛与侧栏「优先事项」视图、输入框底栏无锁 Git 状态与只读 Unified Diff 胶囊（`+X / -Y`）、`/goal` 目标常驻栏与实时编辑抽屉、务实编码模式与 `/code-review` 只读审查技能。
 - **Prism 光学美化与现代工作台**：内置四套深浅光学配色、场景一键预设（`Native` / `Ultra` / `Focus` / `Eco`）、水波试管上下文指示器、推理档位滑杆与按模型记忆、长代码块折叠、行内步骤 Git Diff、侧栏悬停大纲、会话文件夹整理、像素桌宠与本地壁纸，并支持脱敏配置一键导出备份与还原（详见 [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)）。
 - **上下文、速度与本地用量看板**：输入框下方实时显示上下文窗口占用（缓存复用、压缩次数、Orchestrator 分模型进度）与生成速度（`tok/s`、首字延迟、模型/工具耗时和参考费用）；左侧栏 **Antigravity Max** 看板提供 53 周热力图、请求记录、短间隔掉缓存标红、报错复制与配额估算。
@@ -112,7 +128,7 @@
 
 ## 安装与卸载
 
-> 环境要求：先安装并启动过一次 Antigravity。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置。
+> 环境要求：先安装并启动过一次 Antigravity。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置；若本机已有用户自行安装的 `agy-fast`，也会智能兼容不破坏原有自定义规则。
 
 ### 方式一：发给 Agent 自动安装（推荐）
 
@@ -141,13 +157,13 @@ sh ./install.sh
 ### 更新与卸载
 
 - **应用内更新**：打开 **Antigravity Max -> 设置 -> 关于 -> 检查更新**，点击 **立即更新** 自动完成 SHA-256 校验与替换，启动失败会自动回滚旧版。
-- **卸载**：运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1`（Windows）或 `sh ./uninstall.sh`（macOS / Linux / WSL2）。末尾加 `--keep-settings` 可保留个人配置。卸载不会影响原有聊天记录、账号和其他插件。
+- **卸载**：运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1`（Windows）或 `sh ./uninstall.sh`（macOS / Linux / WSL2）。末尾加 `--keep-settings` 可保留个人配置。卸载时会自动清理本插件托管的组件，同时完整保留你之前独立安装的插件、聊天记录和账号。
 
 ---
 
 ## 配置说明
 
-所有选项都在 **Antigravity Max -> 设置** 里实时生效并自动保存（支持分类筛选、场景预设、脱敏 JSON 导出导入以及底部恢复默认设置）。
+所有选项都在 **Antigravity Max -> 设置** 里实时生效并自动保存（支持分类筛选、场景预设、**内置 `agy-fast` 一键开关**、脱敏 JSON 导出导入以及底部恢复默认设置）。
 
 <details>
 <summary><strong>展开查看常用环境变量与数据目录</strong></summary>
@@ -156,7 +172,8 @@ sh ./install.sh
 | --- | --- |
 | `ANTIGRAVITY_USER_DATA_DIR` | 使用独立客户端配置目录时指定自定义用户数据目录 |
 | `ANTIGRAVITY_CDP_PORT_FILE` | 显式指定 `DevToolsActivePort` 绝对路径（兼容 `AGY_BROWSER_ACTIVE_PORT_FILE`） |
-| `~/.gemini/config/plugins/agy-max/` | 插件程序与运行脚本安装目录 |
+| `~/.gemini/config/plugins/agy-max/` | 主插件程序、工作台与内置套件目录 |
+| `~/.gemini/config/plugins/agy-fast/` | 内置 `agy-fast` 加速引擎挂载目录（关闭开关后自动停用卸载） |
 | `~/.gemini/antigravity/plugin_data/agy-max/` | 个人设置、目标记录、账号元数据、配额采样和参考单价缓存目录 |
 
 </details>
@@ -165,17 +182,17 @@ sh ./install.sh
 
 ## 更新日志
 
+### v1.1.0
+- **默认内置 `agy-fast` 加速引擎**：随安装包内置 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（`v0.3.0`），安装后默认自动部署启用，并在「设置 -> 会话增强」新增 **内置 agy-fast 加速引擎** 开关，支持随时一键停用或恢复（自动保留自定义 `*.local.md` 规则并兼容用户独立安装目录）。
+- **完善开源来源与致谢公示**：在双语 README 顶部导览、独立致谢章节、第三方声明 [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt) 与应用内「设置 -> 关于」页面清晰列出对 [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools)、[RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism) 与 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) 的借鉴与集成说明。
+
 ### v1.0.0
 - **独立品牌首发 (`Antigravity Max` / `agy-max`)**：确立全能工作台产品路线，支持一键无感接管旧版 `agy-powertools` 并自动迁移本地设置、目标记录与系统凭据库多账号配置。
-- **输入框下置状态条**：将 Git 状态胶囊与上下文/速度遥测整合至输入卡片下方状态栏，释放输入区横向空间。
-- **类 Codex 工作流增强**：集成毫秒级本地与 SSH 全文会话搜索（`⌘+⌥+F` / `Ctrl+Alt+F`）、运行中会话铃铛与侧栏「优先事项」视图、只读 Git Diff 预览胶囊、`/goal` 常驻目标栏与编辑抽屉、完整工具链 Markdown 复制及外部编辑器行列号直达。
-- **Prism 光学与工作台套件**：内置深浅光学主题、边缘光晕、水波试管、推理档位滑杆、长代码折叠、行内 Git Diff、会话文件夹、本地壁纸/桌宠及脱敏配置备份还原。
-- **SSH 粘贴增强与全平台基座**：支持粘贴 `ssh -p 2222 user@host` 自动填表、多语言汉化、53 周本地用量看板、多账号安全切号、免 TUN 独立代理及 SSH / WSL2 跨平台支持。
+- **输入框下置状态条 + 类 Codex 工作流 + Prism 光学工作台**：整合下置 Git 状态胶囊与上下文/速度遥测、全文会话搜索（`⌘+⌥+F`）、运行中会话铃铛与侧栏「优先事项」、`/goal` 常驻目标栏、深浅光学主题、水波试管、推理档位滑杆、SSH 命令粘贴、多账号切换与免 TUN 独立代理。
 
 ---
 
-## 协议与致谢
+## 协议与链接
 
-- **开源协议**：[MIT License](LICENSE)
-- **致谢说明**：本项目底层调试挂载与基础遥测架构衍生自 MIT 开源项目 [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools)，光学工作台规格参考见 [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)，日期范围日历组件许可见 [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt)。
+- **开源协议**：[MIT License](LICENSE)（第三方组件声明见 [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt)）
 - **问题反馈**：[GitHub Issues](https://github.com/wangbingnan136/agy-max/issues)（提交时请附上操作系统、Antigravity 版本和插件版本）

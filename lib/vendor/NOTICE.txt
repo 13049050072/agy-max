@@ -1,9 +1,13 @@
-HextaUI DateRangeCalendar interaction adapted from:
-https://github.com/preetsuthar17/hextaui/blob/48accfd4200d5cc914156c38b0a858318228191f/components/ui/date-picker.tsx
-Copyright (c) 2026 Preet Suthar, MIT. See HextaUI-LICENSE.txt.
+1. HextaUI DateRangeCalendar interaction adapted from:
+   https://github.com/preetsuthar17/hextaui/blob/48accfd4200d5cc914156c38b0a858318228191f/components/ui/date-picker.tsx
+   Copyright (c) 2026 Preet Suthar, MIT. See HextaUI-LICENSE.txt.
+   The calendar uses react-day-picker 10.0.2 and date-fns (licenses included in this folder).
 
-The calendar uses react-day-picker 10.0.2 and date-fns. Their licenses are
-included here. The bundle uses Antigravity's React instance and native
-popover/menu controls. Rebuild with npm ci && npm run build:calendar.
+2. Bundled agy-fast accelerator plugin (lib/vendor/agy-fast):
+   https://github.com/INK-Q/agy-fast
+   Copyright (c) 2026 agy-fast contributors (inkwhite / INK-Q), MIT License.
+   See lib/vendor/agy-fast/LICENSE for the full license text.
 
-The rest of HextaUI and its theme are not bundled.
+3. Upstream foundation & specification acknowledgments:
+   - Core debugging attachment & telemetry foundation derived from WhiteBr1ck/agy-powertools (https://github.com/WhiteBr1ck/agy-powertools, MIT License).
+   - Optical themes & modern workbench design inspired by RMvdesi/obsidian-prism (https://github.com/RMvdesi/obsidian-prism; clean-room MIT implementation, see docs/PRISM_COMPATIBILITY.md).

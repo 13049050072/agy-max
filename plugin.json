@@ -1,8 +1,8 @@
 {
   "name": "agy-max",
   "displayName": "Antigravity Max",
-  "version": "1.0.0",
-  "description": "All-in-one flagship workbench for Antigravity 2.0: multilingual UI, Codex-style search/Git/goals workflow, Prism optics, session branching, context telemetry, multi-account switcher, and no-TUN proxy.",
+  "version": "1.1.0",
+  "description": "All-in-one flagship workbench for Antigravity 2.0: built-in agy-fast accelerator, multilingual UI, Codex-style search/Git/goals workflow, Prism optics, context telemetry, multi-account switcher, and no-TUN proxy.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "Branch the current session from a previous turn",
