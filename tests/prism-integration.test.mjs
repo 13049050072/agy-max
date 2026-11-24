@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -128,5 +128,86 @@ test('Prism RPC scopes the diff and keeps unfinished or consent-sensitive capabi
     }
   } finally {
     rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Prism diff.inline supports percent-encoded spaces/CJK URIs, deleted tracked files, non-realpathed tmpdir (macOS /var), and clean non-git errors', async () => {
+  // Intentionally do NOT realpathSync(tmpdir()) so macOS /var -> /private/var is exercised
+  const rawTemp = mkdtempSync(join(tmpdir(), 'agy-prism-diff-edge-'));
+  const repoDir = join(rawTemp, 'my repo');
+  const nonGitDir = join(rawTemp, 'plain-folder');
+  mkdirSync(repoDir, { recursive: true });
+  mkdirSync(nonGitDir, { recursive: true });
+
+  const git = (args, cwd = repoDir) => execFileSync('git', args, { cwd, stdio: 'pipe' });
+  const previous = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = join(rawTemp, 'empty-config');
+  try {
+    git(['init'], repoDir);
+    const spaceSub = join(repoDir, 'dir with space');
+    const delSub = join(repoDir, 'removed dir');
+    mkdirSync(spaceSub, { recursive: true });
+    mkdirSync(delSub, { recursive: true });
+
+    const cjkFile = join(spaceSub, '中文 文件.txt');
+    const deletedFile = join(delSub, 'deleted.txt');
+    writeFileSync(cjkFile, 'old-cjk\n');
+    writeFileSync(deletedFile, 'deleted-line-1\ndeleted-line-2\n');
+    git(['add', '.']);
+    git(['-c', 'user.name=Powertools Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'init']);
+
+    writeFileSync(cjkFile, 'new-cjk\n');
+    rmSync(delSub, { recursive: true, force: true });
+
+    const linkWorkspace = join(rawTemp, 'symlink-workspace');
+    if (process.platform !== 'win32') symlinkSync(repoDir, linkWorkspace);
+
+    const dataDir = join(rawTemp, 'data');
+    const settings = createSettingsStore(dataDir);
+    const workspaces = {
+      repo: pathToFileURL(repoDir).href,
+      plain: pathToFileURL(nonGitDir).href,
+      link: pathToFileURL(linkWorkspace).href
+    };
+    const svc = createPrismService({ settings, dataDir, workspaceOf: id => workspaces[id] || '' });
+    const req = (method, payload) => svc.request({ method, ...payload });
+
+    // Percent-encoded file:// URI with spaces, CJK, and #L1 metadata works even under non-realpathed /var workspace
+    const cjkUri = `${pathToFileURL(cjkFile).href}#L1`;
+    const cjkDiff = await req('diff.inline', { conversationId: 'repo', path: cjkUri });
+    assert.equal(cjkDiff.ok, true);
+    assert.ok(cjkDiff.lines.some(line => line.kind === 'del' && line.text.includes('old-cjk')));
+    assert.ok(cjkDiff.lines.some(line => line.kind === 'add' && line.text.includes('new-cjk')));
+
+    // Deleted tracked file inside deleted directory works via both relative path and file:// URI
+    const delDiffRel = await req('diff.inline', { conversationId: 'repo', path: 'removed dir/deleted.txt' });
+    assert.equal(delDiffRel.ok, true);
+    assert.ok(delDiffRel.lines.some(line => line.kind === 'del' && line.text.includes('deleted-line-1')));
+
+    const delDiffUri = await req('diff.inline', { conversationId: 'repo', path: pathToFileURL(deletedFile).href });
+    assert.equal(delDiffUri.ok, true);
+    assert.ok(delDiffUri.lines.some(line => line.kind === 'del' && line.text.includes('deleted-line-2')));
+
+    // Deleted sensitive file & .git subpath still rejected
+    await assert.rejects(req('diff.inline', { conversationId: 'repo', path: '.env' }), /敏感/);
+    await assert.rejects(req('diff.inline', { conversationId: 'repo', path: '.git/HEAD' }), /越出工作区/);
+
+    // Non-Git directory throws clean message without leaking raw ENOENT/local path
+    await assert.rejects(
+      req('diff.inline', { conversationId: 'plain', path: 'a.txt' }),
+      err => err.message === '行内差异需要普通 Git 仓库'
+    );
+
+    // Actual symlink workspace is still rejected
+    if (process.platform !== 'win32') {
+      await assert.rejects(
+        req('diff.inline', { conversationId: 'link', path: 'dir with space/中文 文件.txt' }),
+        /不支持符号链接工作区/
+      );
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previous;
+    rmSync(rawTemp, { recursive: true, force: true });
   }
 });
