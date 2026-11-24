@@ -1,0 +1,181 @@
+<div align="center">
+  <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
+  <h1>Antigravity Max (<code>agy-max</code>)</h1>
+  <p><strong>All-in-one flagship native workbench for Antigravity 2.0</strong></p>
+  <p>Multilingual UI / Codex-style workflow suite / Prism optics &amp; workbench / Context &amp; usage dashboard / Session branching &amp; inline edit / Multi-account switcher / No-TUN proxy / SSH &amp; WSL2</p>
+  <!-- plugin-badges:start -->
+  <p>
+    <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
+    <a href="https://github.com/wangbingnan136/agy-max/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/wangbingnan136/agy-max/ci.yml?label=CI" height="20" alt="CI" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/wangbingnan136/agy-max?label=License&color=16a34a" height="20" alt="MIT License" /></a>
+    <img src="https://img.shields.io/badge/Antigravity-2.35.0+-0f172a" height="20" alt="Antigravity 2.35.0+" />
+    <img src="https://img.shields.io/badge/Node.js-%3E%3D22.13-339933" height="20" alt="Node.js >= 22.13" />
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WSL2-475569" height="20" alt="Platform" />
+  </p>
+  <!-- plugin-badges:end -->
+  <p>
+    <a href="README.md">简体中文</a> |
+    <strong>English</strong>
+  </p>
+  <p>
+    <a href="#screenshots">Screenshots</a> |
+    <a href="#features">Features</a> |
+    <a href="#installation">Installation</a> |
+    <a href="#configuration">Configuration</a> |
+    <a href="#changelog">Changelog</a>
+  </p>
+</div>
+
+<p align="center">
+  <img src="docs/images/hero-workspace.png" alt="Antigravity Max workspace" width="100%" />
+</p>
+
+> Attaches non-invasively to Antigravity 2.0 over the local debugging interface without patching installation files or opening external web pages. Installing over `agy-powertools` automatically pauses the legacy plugin and migrates your saved settings and multi-account configuration.
+
+---
+
+## Screenshots
+
+<table>
+  <tr>
+    <th width="50%">Under-Card Status Strip &amp; Context Telemetry</th>
+    <th width="50%">Overview Task Progress &amp; Quota</th>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/images/card-composer.png" alt="Context window and speed stats" width="100%" />
+      <p>Check the Git status pill, context usage ring (or liquid vial), cache reuse, and generation speed in the clean under-card composer strip.</p>
+    </td>
+    <td>
+      <img src="docs/images/card-overview-panel.png" alt="Overview task progress and quota" width="100%" />
+      <p>Track live execution steps, per-step durations, and remaining model quotas in the right Overview panel; click headers to collapse.</p>
+    </td>
+  </tr>
+  <tr>
+    <th>Usage Overview (Light)</th>
+    <th>Usage Overview (Dark)</th>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/images/card-dashboard-light.png" alt="Usage overview in light theme" width="100%" />
+      <p>Defaults to the current weekly quota cycle, displaying request counts, tokens, cache hit rate, estimated cost, a 53-week heatmap, and model health.</p>
+    </td>
+    <td>
+      <img src="docs/images/card-dashboard-dark.png" alt="Usage overview in dark theme" width="100%" />
+      <p>Follows light and dark themes, comparing token share, cost share, cache hit rate, and generation speed across models.</p>
+    </td>
+  </tr>
+  <tr>
+    <th>Requests &amp; Cache Anomalies</th>
+    <th>Multi-Account &amp; Quota Manager (Off by default)</th>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/images/card-requests.png" alt="Request events and cache anomalies" width="100%" />
+      <p>Filter requests by account, model, conversation, and status, and flag short-interval cache drops while ignoring cold starts and compactions.</p>
+    </td>
+    <td>
+      <img src="docs/images/card-accounts.png" alt="Multi-account switching and quota management" width="100%" />
+      <p>Store and switch multiple Google accounts locally via OS native keyrings, with 5-hour and weekly quota views in one place.</p>
+    </td>
+  </tr>
+  <tr>
+    <th>Multilingual &amp; Optics Settings</th>
+    <th>No-TUN Proxy (Off by default)</th>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/images/card-settings.png" alt="Language and display settings" width="100%" />
+      <p>Switch display languages, scene presets, optical palettes, compact layout, and user bubble tints live without restarting.</p>
+    </td>
+    <td>
+      <img src="docs/images/card-proxy.png" alt="No-TUN application proxy settings" width="100%" />
+      <p>Route only Antigravity through HTTP or SOCKS5 with built-in connectivity checks, Force HTTP/1.1, and verified in-app updates.</p>
+    </td>
+  </tr>
+</table>
+
+---
+
+## Features
+
+- **Codex-style flagship workflow suite**: Millisecond full-text search across local and SSH transcripts (`Cmd+Opt+F` / `Ctrl+Alt+F` jumping straight to matched turns with one-click code/command copy), an active-sessions bell next to the titlebar conversation picker with a sidebar `Priority` running/unread list, a non-locking composer Git status &amp; read-only Unified Diff pill (`+X / -Y`), a persistent `/goal` bar with a live Goal editor drawer, plus pragmatic coding mode and `/code-review`.
+- **Prism optics and modern workbench**: Four light/dark optical palettes, one-click scene presets (`Native` / `Ultra` / `Focus` / `Eco`), liquid vial context indicator, reasoning effort slider with per-model memory, long code-block folding, inline step Git diffs, hover turn outline, chat folders, pixel mascots, local image/video wallpapers, and sanitized JSON config backup/restore.
+- **Context, speed, and local usage dashboard**: Live context ring (cache reuse, compaction count, Orchestrator per-model bars) and speed dial (`tok/s`, TTFT, model/tool time, estimated session cost) below the composer, paired with the **Antigravity Max** sidebar dashboard (53-week heatmap, per-request log, cache anomaly alerts, and official pricing refresh).
+- **Session branching, inline editing, and full Markdown export**: Fork full-history sessions (including subagent chats), revise sent messages in place, or copy full transcripts (or up to any turn) as complete Markdown including tool call arguments, tool outputs, and restored truncated responses across local and SSH sessions.
+- **Multilingual UI**: Localizes panels, common menus, permission dialogs, model descriptions, settings, and Swarm iframes while leaving chat messages and code blocks untouched.
+- **Multi-account switching and no-TUN proxy (off by default)**: OS keyring isolation across Windows, macOS, Linux, and WSL2 with ownership checks and optional auto-switch on depletion; per-app HTTP/SOCKS5 proxy injection with connectivity testing and `GODEBUG=http2client=0`.
+- **Paste SSH commands, remote sync, and WSL2 support**: Paste `ssh -p 2222 user@host` into Create New Project -> SSH Host to auto-fill `user@host:2222` (safely discarding appended passwords); read remote SSH telemetry over local OpenSSH with zero server installation; full Windows + WSL2 support across NAT and Mirrored modes.
+- **File context menu and external editor jump**: Right-click file links or Files tree entries to attach to chat, jump to exact `line:col` anchors in `Cursor` / `VS Code` / `Windsurf` / `Zed`, reveal in folder, or copy paths (including Windows LAN NAS / SMB shares).
+
+---
+
+## Installation
+
+> Requirements: Antigravity installed and started at least once. Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` installations are automatically paused and migrated seamlessly.
+
+### Option 1: Let an Agent install it (recommended)
+
+Send this prompt to Antigravity or another local coding agent:
+
+> Please install Antigravity Max from https://github.com/wangbingnan136/agy-max . Read README_EN.md and docs/INSTALL_AGENT.md first, and run the unified installer provided by the project using local Node.js or Antigravity's bundled runtime. Keep all other plugins, account settings, and chat history intact, and do not force-close the running client. Verify the installed version afterward and remind me if a client restart is needed.
+
+See [Agent installation guide](docs/INSTALL_AGENT.md) for details.
+
+### Option 2: Command line
+
+Download and extract the latest ZIP from [Releases](https://github.com/wangbingnan136/agy-max/releases) (or clone this repository), then run:
+
+```powershell
+# Windows (PowerShell)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+```sh
+# macOS / Linux / WSL2
+sh ./install.sh
+```
+
+Restart Antigravity once you finish your current task; **Antigravity Max** will appear in the left sidebar. On macOS, `~/Applications/Antigravity (Max).app` is generated with the native icon so you can drag it into your Dock.
+
+### Updates and uninstall
+
+- **In-app updates**: Go to **Antigravity Max -> Settings -> About -> Check for updates** and click **Install update**. Packages are SHA-256 verified and roll back automatically if startup fails.
+- **Uninstall**: Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1` (Windows) or `sh ./uninstall.sh` (macOS / Linux / WSL2). Append `--keep-settings` to keep your preferences.
+
+---
+
+## Configuration
+
+Every setting applies live in **Antigravity Max -> Settings** and saves automatically, with category filters, scene presets, sanitized JSON export/import, and **Restore defaults**.
+
+<details>
+<summary><strong>Expand environment variables and paths</strong></summary>
+
+| Name / Path | Description |
+| --- | --- |
+| `ANTIGRAVITY_USER_DATA_DIR` | Custom Antigravity user-data directory for isolated profiles |
+| `ANTIGRAVITY_CDP_PORT_FILE` | Explicit path to `DevToolsActivePort` (also honors `AGY_BROWSER_ACTIVE_PORT_FILE`) |
+| `~/.gemini/config/plugins/agy-max/` | Installed plugin files and runtime scripts |
+| `~/.gemini/antigravity/plugin_data/agy-max/` | Saved settings, goals, account metadata, quota samples, and pricing cache |
+
+</details>
+
+---
+
+## Changelog
+
+### v1.0.0
+- **Initial standalone release (`Antigravity Max` / `agy-max`)**: All-in-one workbench edition with automatic takeover and seamless migration of settings, goals, and OS-keyring multi-account records from `agy-powertools`.
+- **Under-card composer status strip**: Unified Git status pill and session context/speed telemetry beneath the composer card.
+- **Codex-style workflow suite**: Local &amp; SSH full-text session search (`Cmd+Opt+F` / `Ctrl+Alt+F`), active-sessions bell &amp; sidebar `Priority` view, read-only Git diff preview pill, persistent `/goal` tracker &amp; editor drawer, full Markdown transcript copy, and external editor `line:col` launch.
+- **Prism optics &amp; workbench suite**: Optical palettes, scene presets, conversation aura, liquid vial indicator, reasoning effort slider, code-block folding, inline step diffs, chat folders, local wallpapers/mascots, and sanitized settings backup/restore.
+- **SSH command paste &amp; cross-platform foundation**: Auto-parse `ssh -p 2222 user@host` on paste, multilingual UI, 53-week local usage dashboard, multi-account vault switcher, no-TUN proxy, and SSH / WSL2 support.
+
+---
+
+## License &amp; Acknowledgments
+
+- **License**: [MIT License](LICENSE)
+- **Acknowledgments**: Built upon the MIT-licensed debugging attachment and telemetry foundation from [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools); optical workbench specification notes in [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md); date-range calendar notices in [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt).
+- **Issues**: [GitHub Issues](https://github.com/wangbingnan136/agy-max/issues) (please include OS, Antigravity version, and plugin version)

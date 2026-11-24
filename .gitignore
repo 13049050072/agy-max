@@ -1,0 +1,6 @@
+.research/
+.backups/
+node_modules/
+dist/
+VERIFICATION.md
+scripts/verify-*.mjs

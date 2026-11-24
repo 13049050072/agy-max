@@ -1,0 +1,20 @@
+name: 功能建议 (Feature Request)
+description: 提出新功能想法或交互体验改进建议
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景与痛点
+      description: 你在日常使用 Antigravity 时遇到了什么不便？
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望方案
+      description: 你希望 Antigravity Max 提供什么样的功能或配置项？
+    validations:
+      required: true

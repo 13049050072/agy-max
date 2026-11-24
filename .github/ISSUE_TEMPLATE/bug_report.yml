@@ -1,0 +1,58 @@
+name: 问题反馈 (Bug Report)
+description: 反馈插件功能异常、安装失败或 Antigravity 客户端升级后的适配问题
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: agy_version
+    attributes:
+      label: Antigravity 客户端版本
+      placeholder: 例如 2.32.1
+    validations:
+      required: true
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Antigravity Max 插件版本
+      placeholder: 例如 1.0.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 现象描述
+      description: 请简要说明遇到了什么问题，以及预期应该是什么表现。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 ...
+        2. 点击 ...
+        3. 出现 ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错信息或截图（可选）
+      description: 如有终端输出或界面截图，可粘贴在此处（注意抹去个人路径或账号信息）。
+    validations:
+      required: false
