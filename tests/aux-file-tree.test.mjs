@@ -41,7 +41,7 @@ function collectText(node) {
   return '';
 }
 
-function createAuxTreeHarness({ conversationId = 'conv-1', workspaceUri = '', recentWorkspaces = [], requestHandler = async () => ({}) } = {}) {
+function createAuxTreeHarness({ conversationId = 'conv-1', workspaceUri = '', recentWorkspaces = [], requestHandler = async () => ({}), confirm } = {}) {
   let stateSlots = [];
   let hookIdx = 0;
   let effects = [];
@@ -121,7 +121,8 @@ function createAuxTreeHarness({ conversationId = 'conv-1', workspaceUri = '', re
     document: doc,
     setTimeout,
     clearTimeout,
-    decodeURIComponent
+    decodeURIComponent,
+    confirm
   });
   vm.runInContext(auxTreeSource, context);
   const auxTree = context.__agyCreateAuxFileTree(env);
@@ -244,6 +245,23 @@ test('workspace-explorer lists directories folders-first, filters files, preview
     });
     assert.equal(textPrev.kind, 'text');
     assert.match(textPrev.content, /Demo Project/);
+    assert.equal(textPrev.editable, true);
+
+    const readmePath = join(projDir, 'README.md');
+    const readmeUri = pathToFileURL(readmePath).href;
+    const stale = explorer.writeTextFile({ rootUri: picked.uri, fileUri: readmeUri, content: '# Mine\n', expectedMtimeMs: textPrev.mtimeMs - 1000 });
+    assert.equal(stale.conflict, true);
+    assert.match(readFileSync(readmePath, 'utf8'), /Demo Project/);
+    const saved = explorer.writeTextFile({ rootUri: picked.uri, fileUri: readmeUri, content: '# Mine\n', expectedMtimeMs: textPrev.mtimeMs });
+    assert.equal(saved.ok, true);
+    assert.equal(readFileSync(readmePath, 'utf8'), '# Mine\n');
+    assert.equal(explorer.writeTextFile({ rootUri: picked.uri, fileUri: readmeUri, content: '# Forced\n', expectedMtimeMs: 0, overwrite: true }).ok, true);
+    assert.equal(readFileSync(readmePath, 'utf8'), '# Forced\n');
+    assert.throws(() => explorer.writeTextFile({ rootUri: picked.uri, fileUri: pathToFileURL(join(outsideDir, 'secret.txt')).href, content: 'x', overwrite: true }), /不在当前已授权/);
+    assert.equal(readFileSync(join(outsideDir, 'secret.txt'), 'utf8'), 'outside secret');
+
+    writeFileSync(join(projDir, 'gbk.txt'), Buffer.from([0xc4, 0xe3, 0xba, 0xc3]));
+    assert.equal(explorer.readFilePreview({ rootUri: picked.uri, fileUri: pathToFileURL(join(projDir, 'gbk.txt')).href }).editable, false);
 
     const nbPrev = explorer.readFilePreview({
       rootUri: picked.uri,
@@ -398,4 +416,51 @@ test('aux-file-tree removes legacy right-rail attributes, registers into native 
 
   h.auxTree.dispose();
   assert.equal(h.customSidePanels.has('agyFileTree'), false);
+});
+
+test('aux-file-tree edits text files inline, keeps CRLF, and asks before overwriting outside changes', async () => {
+  const demoUri = 'file:///Users/test/demo-repo';
+  const writes = [];
+  const h = createAuxTreeHarness({
+    workspaceUri: demoUri,
+    confirm: () => true,
+    requestHandler: async (method, payload) => {
+      if (method === 'workspace.listDir') {
+        return { ok: true, rootUri: demoUri, rootName: 'demo-repo', entries: [{ name: 'a.py', relPath: 'a.py', uri: `${demoUri}/a.py`, isDirectory: false }] };
+      }
+      if (method === 'workspace.readFile') {
+        return { ok: true, kind: 'text', name: 'a.py', path: '/Users/test/demo-repo/a.py', uri: payload.fileUri, size: 14, mtimeMs: 5, editable: true, content: 'x = 1\r\ny = 2\r\n' };
+      }
+      if (method === 'workspace.writeFile') {
+        writes.push(payload);
+        return writes.length === 1 ? { ok: false, conflict: true, mtimeMs: 9 } : { ok: true, mtimeMs: 10, size: 15 };
+      }
+      return { ok: true };
+    }
+  });
+  h.auxTree.sync({ enabled: true });
+  let tree = await h.render();
+  await findAllByTestId(tree, 'agy-ftree-file-row')[0].props.onClick();
+  tree = await h.render();
+  findByTestId(tree, 'agy-ftree-preview-edit').props.onClick();
+  tree = await h.render();
+  assert.equal(findByTestId(tree, 'agy-ftree-editor').props.value, 'x = 1\ny = 2\n');
+  assert.equal(findByTestId(tree, 'agy-ftree-preview-save').props.disabled, true);
+
+  findByTestId(tree, 'agy-ftree-editor').props.onChange({ target: { value: 'x = 42\ny = 2\n' } });
+  tree = await h.render();
+  assert.equal(findByTestId(tree, 'agy-ftree-preview-save').props.disabled, false);
+
+  // Cmd+S: the first write reports an outside change, confirm() approves, so it retries with overwrite.
+  let prevented = false;
+  findByTestId(tree, 'agy-ftree-editor').props.onKeyDown({ metaKey: true, key: 's', preventDefault() { prevented = true; }, stopPropagation() {} });
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(prevented, true);
+  assert.deepEqual(writes.map(w => w.overwrite), [false, true]);
+  assert.equal(writes[0].content, 'x = 42\r\ny = 2\r\n');
+  assert.equal(writes[0].expectedMtimeMs, 5);
+
+  tree = await h.render();
+  assert.ok(findByTestId(tree, 'agy-ftree-editor'));
+  assert.equal(findByTestId(tree, 'agy-ftree-preview-save').props.disabled, true);
 });

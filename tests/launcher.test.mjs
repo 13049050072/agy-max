@@ -725,6 +725,44 @@ test('parseFileUriAnchor, resolveExternalEditor, and openInExternalEditor jump t
   }
 });
 
+test('openInExternalEditor supports Kiro and falls back to the built-in system text editor', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-editor-sys-'));
+  try {
+    const targetFile = join(dir, 'notes.md');
+    writeFileSync(targetFile, '# hi\n');
+    const binDir = join(dir, 'bin');
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, 'xdg-open'), '');
+    const calls = [];
+    const fakeSpawn = (cmd, args) => { calls.push({ cmd, args }); return { on() {}, unref() {} }; };
+    const uri = `${pathToFileURL(targetFile).href}#L3`;
+
+    const linuxRes = await openInExternalEditor(uri, { preferred: 'auto', platform: 'linux', env: { PATH: binDir }, home: dir, spawnProcess: fakeSpawn });
+    assert.equal(linuxRes.editor, 'system');
+    assert.deepEqual(calls.at(-1), { cmd: join(binDir, 'xdg-open'), args: [targetFile] });
+
+    writeFileSync(join(binDir, 'gedit'), '');
+    assert.equal(resolveExternalEditor({ preferred: 'system', platform: 'linux', env: { PATH: binDir }, home: dir }).command, join(binDir, 'gedit'));
+
+    const macExists = p => p === '/usr/bin/open' || p === targetFile;
+    await openInExternalEditor(uri, { preferred: 'auto', platform: 'darwin', env: { PATH: '' }, home: dir, spawnProcess: fakeSpawn, exists: macExists });
+    assert.deepEqual(calls.at(-1), { cmd: '/usr/bin/open', args: ['-t', targetFile] });
+
+    const kiroCli = '/Applications/Kiro.app/Contents/Resources/app/bin/code';
+    const kiroRes = await openInExternalEditor(uri, { preferred: 'auto', platform: 'darwin', env: { PATH: '' }, home: dir, spawnProcess: fakeSpawn, exists: p => p === kiroCli || macExists(p) });
+    assert.equal(kiroRes.editor, 'kiro');
+    assert.deepEqual(calls.at(-1), { cmd: kiroCli, args: ['-g', `${targetFile}:3:1`] });
+
+    const notepad = resolveExternalEditor({ preferred: 'auto', platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, home: dir, exists: p => p === 'C:\\Windows\\System32\\notepad.exe' });
+    assert.equal(notepad.id, 'system');
+
+    await openInExternalEditor(pathToFileURL(dir).href, { preferred: 'system', platform: 'linux', env: { PATH: binDir }, home: dir, spawnProcess: fakeSpawn });
+    assert.deepEqual(calls.at(-1), { cmd: 'xdg-open', args: [dir] });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Windows openInExternalEditor prefers native .exe over .cmd and hardens .cmd fallback against injection and /s quote stripping', async () => {
   const calls = [];
   const fakeSpawn = (cmd, args, opts) => {
