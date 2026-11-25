@@ -1405,10 +1405,15 @@ test('ComposerGoalBar renders floating pill with checklist progress and expands 
     guardrails: ['run_tests']
   };
 
+  let resumedInvocations = [];
+  let syncedGoals = [];
+  let mockRunning = false;
   p.context.__agyNativeAdapter = {
     wrap: el => el,
     composerCascadeId: () => 'conv-goal-ui',
-    setConversationGoal() {}
+    executionState: () => ({ conversationId: 'conv-goal-ui', status: mockRunning ? 2 : 1, lastStepIndex: 4, terminationReason: mockRunning ? 0 : 2 }),
+    setConversationGoal(cid, g) { syncedGoals.push([cid, g?.status || null]); },
+    async resumeGoalInvocation(cid, prompt) { resumedInvocations.push([cid, prompt, syncedGoals.at(-1)?.[1]]); return true; }
   };
   p.context.ReactDOM = {
     createRoot(mount) {
@@ -1436,6 +1441,16 @@ test('ComposerGoalBar renders floating pill with checklist progress and expands 
     if (req.method === 'goal.save') {
       savedPayloads.push(req.payload);
       goalState = { ...goalState, text: req.payload.text, checklist: req.payload.checklist || [], guardrails: req.payload.guardrails || [], updatedAtMs: Date.now() };
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { ok: true, goal: goalState }));
+      return;
+    }
+    if (req.method === 'goal.setStatus') {
+      goalState = {
+        ...goalState,
+        status: req.payload.status,
+        ...(req.payload.status === 'active' && Number.isInteger(req.payload.currentStepIndex) ? { activeAfterStepIndex: req.payload.currentStepIndex } : {}),
+        updatedAtMs: Date.now()
+      };
       queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { ok: true, goal: goalState }));
       return;
     }
@@ -1487,6 +1502,27 @@ test('ComposerGoalBar renders floating pill with checklist progress and expands 
   stateSlots = [];
   const collapsedAgain = evalTree(renderedByMount.get(goalMount));
   assert.equal(collapsedAgain.props['data-testid'], 'agy-goal-bar');
+
+  // Pause goal -> renders ▶ 继续 button; clicking ▶ 继续 while idle first arms active goal on adapter then dispatches resumeGoalInvocation
+  findByTestId(collapsedAgain, 'agy-goal-pause-btn').props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+  stateSlots = [];
+  const pausedPill = evalTree(renderedByMount.get(goalMount));
+  assert.equal(pausedPill.props['data-paused'], 'true');
+  assert.equal(resumedInvocations.length, 0);
+
+  findByTestId(pausedPill, 'agy-goal-pause-btn').props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(resumedInvocations.length, 1);
+  assert.deepEqual(resumedInvocations[0], ['conv-goal-ui', '继续推进当前目标', 'active']);
+
+  // If a turn is already running when user clicks ▶ 继续, status flips to active without sending a duplicate message
+  findByTestId(evalTree(renderedByMount.get(goalMount)), 'agy-goal-pause-btn').props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+  mockRunning = true;
+  findByTestId(evalTree(renderedByMount.get(goalMount)), 'agy-goal-pause-btn').props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(resumedInvocations.length, 1);
 
   p.context.__agyPowertools.dispose();
 });

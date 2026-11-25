@@ -1105,3 +1105,41 @@ test('installPage defers routeTree rebuild during initial router transition and 
   assert.equal(parent.children.length, 1);
   assert.equal(loadCalls, 1);
 });
+
+test('resumeGoalInvocation dispatches continuation via matching ChatContext.sendMessage without disturbing subagent composers', async () => {
+  const sent = [];
+  const subCard = {
+    closest: sel => sel === '[data-testid*="side-question"],[data-testid*="subagent"]' ? {} : null,
+    '__reactFiber$sub': {
+      tag: 10, type: {},
+      memoizedProps: { value: { cascadeContext: { state: { conversationId: 'sub-conv' } }, async sendMessage(p) { sent.push(['sub', p]); } } },
+      return: null
+    }
+  };
+  const mainCard = {
+    closest: () => null,
+    '__reactFiber$main': {
+      tag: 10, type: {},
+      memoizedProps: { value: { cascadeContext: { state: { conversationId: 'main-conv' } }, async sendMessage(p) { sent.push(['main', p]); } } },
+      return: null
+    }
+  };
+  const context = vm.createContext({
+    document: {
+      querySelector: () => mainCard,
+      querySelectorAll: () => [subCard, mainCard]
+    },
+    I: { TextOrScopeItemSchema: { name: 'TextOrScopeItem' } },
+    Wb: (_schema, init) => ({ $typeName: 'exa.cortex_pb.TextOrScopeItem', ...init })
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const ok = await context.__agyNativeAdapter.resumeGoalInvocation('main-conv', '继续推进当前目标');
+  assert.equal(ok, true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], 'main');
+  assert.equal(sent[0][1].cascadeId, 'main-conv');
+  assert.equal(sent[0][1].type, 1);
+  assert.equal(sent[0][1].items[0].$typeName, 'exa.cortex_pb.TextOrScopeItem');
+  assert.equal(sent[0][1].items[0].chunk.value, '继续推进当前目标');
+  assert.equal(await context.__agyNativeAdapter.resumeGoalInvocation('../bad', 'x'), false);
+});
