@@ -19,7 +19,7 @@ function variant(version){const copy=structuredClone(original);copy.version=vers
   if(['lib/native-client.js','lib/native-ui.js'].includes(file.path))text=text.replaceAll(original.version,version);
   const bytes=Buffer.from(text);file.data=bytes.toString('base64');file.sha256=sha256(bytes);
 }return validatePackage(copy);}
-const older=variant('0.9.0'),newer=variant('1.2.0');
+const older=variant('0.9.0'),newer=variant('9.9.0');
 function sandbox(){const root=mkdtempSync(join(tmpdir(),'agy-lifecycle-')),home=join(root,'home'),paths=installationPaths(home);mkdirSync(join(paths.root,'config'),{recursive:true});atomicJson(paths.config,{plugins:{other:{enabled:true}},userSettings:{language:'zh-CN'},sidecars:{'other/tool':{keep:true}}});return{root,home,paths,clean:()=>rmSync(root,{recursive:true,force:true})};}
 
 test('install replaces obsolete files, preserves settings and other plugins, and records a usable backup',async()=>{
@@ -97,7 +97,7 @@ test('update startup failure rolls back and reports rollback instead of success'
 
 test('update preparation refuses unconfigured repositories and stale user-selected versions',async()=>{
   const s=sandbox();try{
-    await assert.rejects(()=>startUpdate({home:s.home,currentVersion:original.version,expectedVersion:'1.2.0',project:{githubUrl:''}}),/版本/);
+    await assert.rejects(()=>startUpdate({home:s.home,currentVersion:original.version,expectedVersion:'9.9.0',project:{githubUrl:''}}),/版本/);
     assert.equal(existsSync(join(s.paths.data,'jobs')),false);
   }finally{s.clean();}
 });

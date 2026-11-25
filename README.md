@@ -1,14 +1,14 @@
 <div align="center">
   <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
   <h1>Antigravity Max (<code>agy-max</code>)</h1>
-  <p><strong>Antigravity 2.0 满血原生全能工作台增强插件</strong></p>
-  <p>默认内置 <code>agy-fast</code> 加速引擎（可随时关闭） / 类 Codex 全套工作流 / Prism 光学美化与工作台 / 多语言汉化 / 上下文与用量看板 / 多账号切换 / 免 TUN 代理 / SSH 与 WSL2 支持</p>
+  <p><strong>Antigravity 2.0 满血原生全能工作台增强插件（已全面适配最新版 Antigravity 2.35.1+）</strong></p>
+  <p>默认内置 <code>agy-fast</code> 加速引擎（可随时关闭） / 原生辅助侧栏文件结构 / 类 Codex 全套工作流 / Prism 光学美化与工作台 / 多语言汉化 / 上下文与用量看板 / 多账号切换 / 免 TUN 代理 / SSH 与 WSL2 支持</p>
   <!-- plugin-badges:start -->
   <p>
     <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
     <a href="https://github.com/wangbingnan136/agy-max/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/wangbingnan136/agy-max/ci.yml?label=CI" height="20" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/wangbingnan136/agy-max?label=License&color=16a34a" height="20" alt="MIT License" /></a>
-    <img src="https://img.shields.io/badge/Antigravity-2.35.0+-0f172a" height="20" alt="Antigravity 2.35.0+" />
+    <img src="https://img.shields.io/badge/Antigravity-2.35.1+-0f172a" height="20" alt="Antigravity 2.35.1+" />
     <img src="https://img.shields.io/badge/Node.js-%3E%3D22.13-339933" height="20" alt="Node.js >= 22.13" />
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WSL2-475569" height="20" alt="Platform" />
   </p>
@@ -114,21 +114,22 @@
 
 ## 主要功能
 
+- **全面适配最新版 Antigravity（`2.35.1+`）**：深度适配最新客户端的侧栏项目置顶、路由加载时序与右侧原生辅助侧栏（`sidePanelV2`）架构，消除新版客户端冷启动白屏与组件挂载异常。
 - **默认内置 `agy-fast` 极速引擎（可随时关闭）**：无需单独安装，装好 `Antigravity Max` 即自动部署并启用内置 `agy-fast`（提供并发批量搜索、符号大纲、多文件原子修改与启动快照）；不想使用时可在「设置 -> 会话增强 -> 内置 agy-fast 加速引擎」一键关闭，保留用户自定义 `*.local.md` 规则不丢失。
-- **类 Codex 旗舰工作流套件**：毫秒级本地与 SSH 历史会话全文搜索（`⌘+⌥+F` / `Ctrl+Alt+F` 直达匹配轮次并一键复制代码或命令）、顶部搜索会话按钮右侧运行中会话铃铛与侧栏「优先事项」视图、输入框底栏无锁 Git 状态与只读 Unified Diff 胶囊（`+X / -Y`）、`/goal` 目标常驻栏与实时编辑抽屉、务实编码模式与 `/code-review` 只读审查技能。
+- **类 Codex 旗舰工作流套件**：毫秒级本地与 SSH 历史会话全文搜索（`⌘+⌥+F` / `Ctrl+Alt+F` 直达匹配轮次并一键复制代码或命令）、顶部搜索会话按钮右侧运行中会话铃铛与带时间窗持久化的侧栏「优先事项」视图、已归档会话一键批量管理、输入框底栏无锁 Git 状态与只读 Unified Diff 胶囊（`+X / -Y`）、`/goal` 目标常驻栏与实时编辑抽屉、务实编码模式与 `/code-review` 只读审查技能。
 - **Prism 光学美化与现代工作台**：内置四套深浅光学配色、场景一键预设（`Native` / `Ultra` / `Focus` / `Eco`）、水波试管上下文指示器、推理档位滑杆与按模型记忆、长代码块折叠、行内步骤 Git Diff、侧栏悬停大纲、会话文件夹整理、像素桌宠与本地壁纸，并支持脱敏配置一键导出备份与还原（详见 [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)）。
 - **上下文、速度与本地用量看板**：输入框下方实时显示上下文窗口占用（缓存复用、压缩次数、Orchestrator 分模型进度）与生成速度（`tok/s`、首字延迟、模型/工具耗时和参考费用）；左侧栏 **Antigravity Max** 看板提供 53 周热力图、请求记录、短间隔掉缓存标红、报错复制与配额估算。
 - **会话分支、原位编辑与完整 Markdown 导出**：从任意历史回答或会话菜单完整分支新会话（支持含子智能体会话）；在原位置编辑已发消息重发；支持整段或截至指定轮次复制完整会话 Markdown（含工具参数、结果与长文本补全，兼容 SSH）。
 - **多语言深度汉化**：覆盖侧栏、常用菜单、权限弹窗、模型说明、设置页与 Swarm 面板，不改动聊天正文与代码块。
 - **多账号切换与免 TUN 代理（默认关闭）**：基于系统钥匙串 / 凭据管理器隔离多个 Google 账号（支持耗尽自动切号与防串号校验）；无需全局 TUN 即可单独为 Antigravity 注入 HTTP/SOCKS5 代理并可选开启 `GODEBUG=http2client=0`。
 - **SSH 一键粘贴、远端同步与 WSL2 支持**：在「新建项目 -> SSH Host」粘贴 `ssh -p 2222 user@host` 自动解析填入（自动丢弃末尾密码防误交）；桌面端直读 SSH 远端会话统计无需服务端装插件；完整支持 Windows + WSL2（NAT / Mirrored）。
-- **文件右键与外部编辑器行列直达**：右键消息文件链接或右侧文件树可引用到对话、在 `Cursor` / `VS Code` / `Windsurf` / `Zed` 中打开并直达指定行列、定位文件夹或复制路径（支持 Windows 局域网 NAS / SMB）。
+- **原生辅助侧栏「文件结构」与外部编辑器行列直达**：在客户端右侧原生辅助侧栏集成「**文件结构**」标签页（支持实时筛选、逐层目录树、代码 / 图片 / `.ipynb` 预览，未绑定工作区的对话也可直接选择文件夹或挂载最近项目）；右键消息文件链接或文件树可一键引用到输入框、在 `Cursor` / `VS Code` / `Windsurf` / `Zed` 中打开并直达指定行列、定位文件夹或复制路径（支持 Windows 局域网 NAS / SMB）。
 
 ---
 
 ## 安装与卸载
 
-> 环境要求：先安装并启动过一次 Antigravity。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置；若本机已有用户自行安装的 `agy-fast`，也会智能兼容不破坏原有自定义规则。
+> 环境要求：已全面适配最新版 Antigravity（`2.35.1+`），请先安装并启动过一次客户端。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置；若本机已有用户自行安装的 `agy-fast`，也会智能兼容不破坏原有自定义规则。
 
 ### 方式一：一句话发给 Agent 自动安装（最推荐）
 
@@ -183,6 +184,12 @@ sh ./install.sh
 ---
 
 ## 更新日志
+
+### v1.2.0
+- **全面适配最新版 Antigravity（`2.35.1+`）与启动稳定性升级**：完整适配新版客户端的侧栏项目置顶、路由过渡时序与 `Antigravity Helper.app` 包路径识别，彻底解决新版客户端下的冷启动白屏（React `#311` 与空路由匹配自动恢复）。
+- **原生辅助侧栏集成「文件结构」标签页**：在右侧原生辅助侧栏（`Toggle Side Panel`）新增「文件结构」入口与独立标签页，支持筛选项目目录、预览代码 / 图片 / `.ipynb`，未关联工作区时可一键选择本地文件夹或挂载最近使用的项目。
+- **优先事项时间窗持久化与已归档会话批量管理**：侧栏「优先事项」支持自定义时间范围筛选与本地磁盘持久化；新增类 Codex 已归档会话管理器，支持一键批量还原或彻底删除。
+- **上下文压缩即时投影与全链路安全性能加固**：`/compact` 压缩后立即投影最新上下文占用与明细；超 12 个会话数据库时启用增量 SQLite 缓存加速看板；全面加固回环地址免代理直连、IPC 信封隔离、Git 符号链接边界与多账号防误切保护。
 
 ### v1.1.0
 - **默认内置 `agy-fast` 加速引擎**：随安装包内置 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（`v0.3.0`），安装后默认自动部署启用，并在「设置 -> 会话增强」新增 **内置 agy-fast 加速引擎** 开关，支持随时一键停用或恢复（自动保留自定义 `*.local.md` 规则并兼容用户独立安装目录）。

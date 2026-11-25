@@ -1,14 +1,14 @@
 <div align="center">
   <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
   <h1>Antigravity Max (<code>agy-max</code>)</h1>
-  <p><strong>All-in-one flagship native workbench for Antigravity 2.0</strong></p>
-  <p>Built-in <code>agy-fast</code> accelerator (toggleable anytime) / Codex-style workflow suite / Prism optics &amp; workbench / Multilingual UI / Context &amp; usage dashboard / Multi-account switcher / No-TUN proxy / SSH &amp; WSL2</p>
+  <p><strong>All-in-one flagship native workbench for Antigravity 2.0 — fully adapted for the latest Antigravity (2.35.1+)</strong></p>
+  <p>Built-in <code>agy-fast</code> accelerator (toggleable anytime) / Native Side Panel File Tree / Codex-style workflow suite / Prism optics &amp; workbench / Multilingual UI / Context &amp; usage dashboard / Multi-account switcher / No-TUN proxy / SSH &amp; WSL2</p>
   <!-- plugin-badges:start -->
   <p>
     <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
     <a href="https://github.com/wangbingnan136/agy-max/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/wangbingnan136/agy-max/ci.yml?label=CI" height="20" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/wangbingnan136/agy-max?label=License&color=16a34a" height="20" alt="MIT License" /></a>
-    <img src="https://img.shields.io/badge/Antigravity-2.35.0+-0f172a" height="20" alt="Antigravity 2.35.0+" />
+    <img src="https://img.shields.io/badge/Antigravity-2.35.1+-0f172a" height="20" alt="Antigravity 2.35.1+" />
     <img src="https://img.shields.io/badge/Node.js-%3E%3D22.13-339933" height="20" alt="Node.js >= 22.13" />
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WSL2-475569" height="20" alt="Platform" />
   </p>
@@ -114,21 +114,22 @@ On top of these foundations, `Antigravity Max` adds an **under-card Git &amp; te
 
 ## Features
 
+- **Fully adapted for the latest Antigravity (`2.35.1+`)**: Seamlessly aligned with the newest client sidebar pinning internals, router transition lifecycle, and native `sidePanelV2` architecture with zero cold-start white-screen issues.
 - **Built-in `agy-fast` accelerator (on by default, toggleable anytime)**: Automatically deploys and enables bundled `agy-fast` (batched search, symbol outlines, atomic multi-file edits, concurrent checks, and startup snapshots) with zero extra setup; turn it off anytime in `Settings -> Conversation enhancements -> Built-in agy-fast accelerator` while preserving any custom `*.local.md` rules.
-- **Codex-style flagship workflow suite**: Millisecond full-text search across local and SSH transcripts (`Cmd+Opt+F` / `Ctrl+Alt+F` jumping straight to matched turns with one-click code/command copy), an active-sessions bell next to the titlebar conversation picker with a sidebar `Priority` running/unread list, a non-locking composer Git status &amp; read-only Unified Diff pill (`+X / -Y`), a persistent `/goal` bar with a live Goal editor drawer, plus pragmatic coding mode and `/code-review`.
+- **Codex-style flagship workflow suite**: Millisecond full-text search across local and SSH transcripts (`Cmd+Opt+F` / `Ctrl+Alt+F` jumping straight to matched turns with one-click code/command copy), an active-sessions bell next to the titlebar conversation picker with a persisted sidebar `Priority` running/unread list, one-click archived chats manager, a non-locking composer Git status &amp; read-only Unified Diff pill (`+X / -Y`), a persistent `/goal` bar with a live Goal editor drawer, plus pragmatic coding mode and `/code-review`.
 - **Prism optics and modern workbench**: Four light/dark optical palettes, one-click scene presets (`Native` / `Ultra` / `Focus` / `Eco`), liquid vial context indicator, reasoning effort slider with per-model memory, long code-block folding, inline step Git diffs, hover turn outline, chat folders, pixel mascots, local image/video wallpapers, and sanitized JSON config backup/restore.
 - **Context, speed, and local usage dashboard**: Live context ring (cache reuse, compaction count, Orchestrator per-model bars) and speed dial (`tok/s`, TTFT, model/tool time, estimated session cost) below the composer, paired with the **Antigravity Max** sidebar dashboard (53-week heatmap, per-request log, cache anomaly alerts, and official pricing refresh).
 - **Session branching, inline editing, and full Markdown export**: Fork full-history sessions (including subagent chats), revise sent messages in place, or copy full transcripts (or up to any turn) as complete Markdown including tool call arguments, tool outputs, and restored truncated responses across local and SSH sessions.
 - **Multilingual UI**: Localizes panels, common menus, permission dialogs, model descriptions, settings, and Swarm iframes while leaving chat messages and code blocks untouched.
 - **Multi-account switching and no-TUN proxy (off by default)**: OS keyring isolation across Windows, macOS, Linux, and WSL2 with ownership checks and optional auto-switch on depletion; per-app HTTP/SOCKS5 proxy injection with connectivity testing and `GODEBUG=http2client=0`.
 - **Paste SSH commands, remote sync, and WSL2 support**: Paste `ssh -p 2222 user@host` into Create New Project -> SSH Host to auto-fill `user@host:2222` (safely discarding appended passwords); read remote SSH telemetry over local OpenSSH with zero server installation; full Windows + WSL2 support across NAT and Mirrored modes.
-- **File context menu and external editor jump**: Right-click file links or Files tree entries to attach to chat, jump to exact `line:col` anchors in `Cursor` / `VS Code` / `Windsurf` / `Zed`, reveal in folder, or copy paths (including Windows LAN NAS / SMB shares).
+- **Native Side Panel File Tree and external editor jump**: Integrates a **File Tree** entry and persistent tab right inside Antigravity's native right Side Panel (filter project files, preview code / images / `.ipynb` notebooks, or pick and mount recent folders when no workspace is linked); right-click file links or File Tree rows to attach to chat, jump to exact `line:col` anchors in `Cursor` / `VS Code` / `Windsurf` / `Zed`, reveal in folder, or copy paths (including Windows LAN NAS / SMB shares).
 
 ---
 
 ## Installation
 
-> Requirements: Antigravity installed and started at least once. Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` setups are migrated seamlessly, and pre-existing standalone `agy-fast` setups are preserved safely.
+> Requirements: Fully adapted for the latest Antigravity (`2.35.1+`, installed and started at least once). Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` setups are migrated seamlessly, and pre-existing standalone `agy-fast` setups are preserved safely.
 
 ### Option 1: One-line prompt for your Agent (recommended)
 
@@ -183,6 +184,12 @@ Every setting applies live in **Antigravity Max -> Settings** and saves automati
 ---
 
 ## Changelog
+
+### v1.2.0
+- **Full compatibility with the latest Antigravity (`2.35.1+`) and cold-start hardening**: Adapted sidebar project pinning to hook-free storage reads (eliminating React `#311` errors), deferred custom route injection during initial router transitions with automatic idle recovery, and skipped nested `Antigravity Helper.app` bundles on macOS.
+- **Native Side Panel File Tree (`auxFileTree`)**: Integrated a dedicated File Tree entry and tab directly into Antigravity's native right Side Panel (`sidePanelV2`) with file filtering, code / image / `.ipynb` previews, and one-click folder picking or recent-project mounting for unlinked chats.
+- **Persisted Priority time window and archived chats manager**: Added selectable time windows and disk persistence for sidebar `Priority` sessions, plus a Codex-style archived conversations manager with batch restore and deletion.
+- **Immediate post-compaction context projection and security/performance hardening**: Projected post-`/compact` token usage immediately, added incremental SQLite caching for >12 session DBs, and hardened loopback proxy bypass, IPC envelope isolation, Git symlink checks, and multi-account backup guards.
 
 ### v1.1.0
 - **Built-in `agy-fast` accelerator (on by default, toggleable anytime)**: Bundled [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) (`v0.3.0`) out of the box and added a `Built-in agy-fast accelerator` toggle under `Settings -> Conversation enhancements` to turn it off or back on anytime while preserving custom `*.local.md` rules and standalone installs.
