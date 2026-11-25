@@ -185,6 +185,12 @@ Every setting applies live in **Antigravity Max -> Settings** and saves automati
 
 ## Changelog
 
+### v1.3.0
+- **Edit code and text files in the File Tree**: Click the pencil in the File Tree preview to edit UTF-8 text files such as `md` / `py` / `js` / `ts` in place and save with `Cmd+S` / `Ctrl+S`. Saves compare the file's modification time first and ask before overwriting changes made by the agent or other programs, replace the file atomically, and keep CRLF line endings; files over 192 KB or not encoded as UTF-8 stay read-only.
+- **`Kiro` and a system text editor fallback for external editors**: `Preferred external editor` now offers `Kiro` and `System text editor` (the macOS default text editor, Windows Notepad, or a common Linux desktop editor / `xdg-open`). Auto-detect falls back to the built-in editor when no IDE is installed, and folders open in the system file manager.
+- **Floating `/goal` pill with pause and resume**: Redesigned the floating goal pill and inline acceptance checklist, auto-pause goals when the user stops or the stream ends abnormally, and dispatch a continuation turn automatically on Resume.
+- **Side panel and plugin page fixes**: The File Tree side panel now works in brand-new chats, and `plugin://` sidecar page hosts are accepted.
+
 ### v1.2.0
 - **Full compatibility with the latest Antigravity (`2.35.1+`) and cold-start hardening**: Adapted sidebar project pinning to hook-free storage reads (eliminating React `#311` errors), deferred custom route injection during initial router transitions with automatic idle recovery, and skipped nested `Antigravity Helper.app` bundles on macOS.
 - **Native Side Panel File Tree (`auxFileTree`)**: Integrated a dedicated File Tree entry and tab directly into Antigravity's native right Side Panel (`sidePanelV2`) with file filtering, code / image / `.ipynb` previews, and one-click folder picking or recent-project mounting for unlinked chats.
