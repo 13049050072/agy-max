@@ -65,6 +65,9 @@ test('invalid package paths, checksums, versions and symlink destinations cannot
   const s=sandbox();try{
     for(const path of ['../outside','lib/../../outside','lib/CON','lib/x.','lib/C:\\outside']){const broken=structuredClone(original);broken.files[0].path=path;assert.throws(()=>validatePackage(broken));}
     const broken=structuredClone(original);broken.files[0].sha256='0'.repeat(64);assert.throws(()=>validatePackage(broken),/校验/);assert.throws(()=>decodePackage(encodePackage(original),'9.9.9'),/信息/);
+    const conflicted=structuredClone(original),uiEntry=conflicted.files.find(f=>f.path==='lib/native-ui.js'),conflictBytes=Buffer.from('<<<<<<< HEAD\nconst a=1;\n=======\nconst a=2;\n>>>>>>> refs/pr/15\n','utf8');
+    uiEntry.data=conflictBytes.toString('base64');uiEntry.sha256=sha256(conflictBytes);
+    assert.throws(()=>validatePackage(conflicted),/合并冲突/);
     const external=join(s.root,'external');mkdirSync(external);mkdirSync(join(s.paths.root,'config','plugins'),{recursive:true});symlinkSync(external,s.paths.installed,process.platform==='win32'?'junction':'dir');
     await assert.rejects(()=>installPlugin({bundle:original,home:s.home,stop}),/符号链接/);assert.deepEqual(readdirSync(external),[]);
   }finally{s.clean();}

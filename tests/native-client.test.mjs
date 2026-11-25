@@ -1045,3 +1045,49 @@ test('installRequestOverrides fails soft when conversation service is unmounted 
   assert.equal(context.sjc, nativeResolve);
   assert.equal(context.Yyc, nativeSegment);
 });
+
+test('installPage defers routeTree rebuild during initial router transition and reloads idle empty matches', () => {
+  const parent = {
+    children: [],
+    addChildren(next) { this.children = next; return this; }
+  };
+  let loadCalls = 0;
+  let updateCalls = 0;
+  const mockRouter = {
+    options: { routeTree: { id: '__root__' } },
+    routeTree: { id: '__root__' },
+    routesById: { '/manager-layout/manager-landing-layout': parent },
+    state: { isLoading: true, status: 'pending', matches: [], pendingMatches: [{ id: '__root__/' }] },
+    navigate() {},
+    buildRouteTree() { return {}; },
+    update() { updateCalls++; },
+    load() { loadCalls++; }
+  };
+  const rootChild = { '__reactFiber$r': { tag: 10, type: {}, memoizedProps: { value: mockRouter }, return: null } };
+  const injectedOverlay = { id: '', hasAttribute: name => name === 'data-agy-powertools-root' };
+  const locationObj = { pathname: '/' };
+  const context = vm.createContext({
+    B: { createElement: () => ({}) },
+    VD: opts => ({ options: opts }),
+    location: locationObj,
+    document: {
+      querySelector: sel => sel === '#root' ? { firstElementChild: rootChild } : null,
+      body: { children: [injectedOverlay, { id: 'root', firstElementChild: rootChild }], firstElementChild: injectedOverlay }
+    }
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const adapter = context.__agyNativeAdapter;
+  const DummyPage = () => null;
+
+  // 1. Mid-load on '/': must defer without mutating routeTree
+  assert.equal(adapter.installPage(DummyPage), false);
+  assert.equal(updateCalls, 0);
+  assert.equal(parent.children.length, 0);
+
+  // 2. Idle with empty matches (stuck white screen state): installs route AND triggers r.load() recovery
+  mockRouter.state = { isLoading: false, status: 'idle', matches: [], pendingMatches: [] };
+  assert.equal(adapter.installPage(DummyPage), true);
+  assert.equal(updateCalls, 1);
+  assert.equal(parent.children.length, 1);
+  assert.equal(loadCalls, 1);
+});

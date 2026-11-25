@@ -995,3 +995,29 @@ test('restoreLaunchers rejects home itself, sibling prefix collisions, wrong fil
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('macOS bundle discovery skips nested Antigravity Helper.app and Antigravity (Max).app wrapper', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-mac-helper-'));
+  try {
+    const home = join(root, 'home'), dataDir = join(root, 'data');
+    const outerApp = join(home, 'Applications', 'Antigravity.app');
+    const helperExe = join(outerApp, 'Contents', 'Frameworks', 'Antigravity Helper.app', 'Contents', 'MacOS', 'Antigravity Helper');
+    const maxLauncherExe = join(home, 'Applications', 'Antigravity (Max).app', 'Contents', 'MacOS', 'launcher');
+    mkdirSync(join(outerApp, 'Contents', 'Frameworks', 'Antigravity Helper.app', 'Contents', 'MacOS'), { recursive: true });
+    mkdirSync(join(home, 'Applications', 'Antigravity (Max).app', 'Contents', 'MacOS'), { recursive: true });
+    writeFileSync(helperExe, '');
+    writeFileSync(maxLauncherExe, '');
+
+    assert.equal(resolveAntigravityExecutable({ platform: 'darwin', env: {}, home, execPath: helperExe }), outerApp);
+    const fromWrapper = resolveAntigravityExecutable({ platform: 'darwin', env: {}, home, execPath: maxLauncherExe });
+    assert.notEqual(fromWrapper, join(home, 'Applications', 'Antigravity (Max).app'));
+    assert.equal(fromWrapper, existsSync('/Applications/Antigravity.app') ? '/Applications/Antigravity.app' : outerApp);
+
+    configureLaunchers({ home, dataDir, platform: 'darwin', sandbox: true, execPath: helperExe });
+    const launcherScript = readFileSync(maxLauncherExe, 'utf8');
+    assert.ok(launcherScript.includes(outerApp));
+    assert.equal(launcherScript.includes('Antigravity Helper.app'), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

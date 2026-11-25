@@ -1,0 +1,351 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import vm from 'node:vm';
+import { createWorkspaceExplorer } from '../lib/workspace-explorer.mjs';
+import { nativeSource } from '../lib/native-host.mjs';
+import { DEFAULT_SETTINGS } from '../lib/settings.mjs';
+import { toZhTw } from '../lib/zh-tw.mjs';
+
+const auxTreeSource = readFileSync(new URL('../lib/aux-file-tree.js', import.meta.url), 'utf8');
+
+function findByTestId(node, id) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.props?.['data-testid'] === id) return node;
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      const hit = findByTestId(child, id);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function findAllByTestId(node, id, out = []) {
+  if (!node || typeof node !== 'object') return out;
+  if (node.props?.['data-testid'] === id) out.push(node);
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) findAllByTestId(child, id, out);
+  }
+  return out;
+}
+
+function collectText(node) {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(collectText).join(' ');
+  if (typeof node === 'object' && Array.isArray(node.children)) return node.children.map(collectText).join(' ');
+  return '';
+}
+
+function createAuxTreeHarness({ conversationId = 'conv-1', workspaceUri = '', recentWorkspaces = [], requestHandler = async () => ({}) } = {}) {
+  let stateSlots = [];
+  let hookIdx = 0;
+  let effects = [];
+  const rootAttrs = new Map([['data-agy-right-rail', '1'], ['data-agy-right-rail-open', '1']]);
+  const customSidePanels = new Map();
+  const contextMenus = [];
+  const attachedFiles = [];
+  const listeners = new Set();
+
+  const R = {
+    createElement(type, props, ...children) {
+      const flat = [];
+      const push = item => {
+        if (Array.isArray(item)) item.forEach(push);
+        else if (item !== null && item !== undefined && item !== false) flat.push(item);
+      };
+      children.forEach(push);
+      return { type, props: props || {}, children: flat };
+    },
+    useState(init) {
+      const i = hookIdx++;
+      if (!(i in stateSlots)) stateSlots[i] = typeof init === 'function' ? init() : init;
+      const setState = next => {
+        stateSlots[i] = typeof next === 'function' ? next(stateSlots[i]) : next;
+      };
+      return [stateSlots[i], setState];
+    },
+    useCallback(fn) { return fn; },
+    useRef(init) {
+      const i = hookIdx++;
+      if (!(i in stateSlots)) stateSlots[i] = { current: init };
+      return stateSlots[i];
+    },
+    useEffect(fn, deps) {
+      const i = hookIdx++;
+      const prev = stateSlots[i];
+      const changed = !Array.isArray(deps) || !Array.isArray(prev) || deps.length !== prev.length || deps.some((v, idx) => !Object.is(v, prev[idx]));
+      stateSlots[i] = deps;
+      if (changed) effects.push(fn);
+    }
+  };
+
+  const doc = {
+    documentElement: {
+      setAttribute(k, v) { rootAttrs.set(k, v); },
+      removeAttribute(k) { rootAttrs.delete(k); }
+    },
+    head: { appendChild() {} },
+    querySelectorAll() { return []; },
+    createElement(tag) {
+      return { tag, style: {}, setAttribute() {}, remove() {} };
+    }
+  };
+
+  const env = {
+    options: () => ({ ...DEFAULT_SETTINGS }),
+    uiText: (zh, en) => zh || en,
+    currentId: () => conversationId,
+    subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    adapter: {
+      workspaceUri: () => workspaceUri,
+      recentWorkspaces: () => recentWorkspaces,
+      attachFileToComposer: async item => { attachedFiles.push(item); },
+      setCustomSidePanel(key, descriptor) {
+        if (descriptor) customSidePanels.set(key, descriptor);
+        else customSidePanels.delete(key);
+        return true;
+      }
+    },
+    request: (method, payload) => requestHandler(method, payload),
+    showFileContextMenu: info => contextMenus.push(info),
+    notify() {}
+  };
+
+  const context = vm.createContext({
+    React: R,
+    document: doc,
+    setTimeout,
+    clearTimeout,
+    decodeURIComponent
+  });
+  vm.runInContext(auxTreeSource, context);
+  const auxTree = context.__agyCreateAuxFileTree(env);
+
+  async function render() {
+    const descriptor = customSidePanels.get(auxTree.PANE_KEY);
+    const Pane = descriptor?.Content || auxTree.FileTreePane;
+    hookIdx = 0;
+    effects = [];
+    Pane({});
+    const pendingEffects = [...effects];
+    effects = [];
+    for (const eff of pendingEffects) eff();
+    await new Promise(r => setTimeout(r, 10));
+    hookIdx = 0;
+    effects = [];
+    return Pane({});
+  }
+
+  return {
+    auxTree,
+    render,
+    rootAttrs,
+    customSidePanels,
+    contextMenus,
+    attachedFiles,
+    setConversation(nextId, nextWsUri = '') {
+      conversationId = nextId;
+      workspaceUri = nextWsUri;
+      for (const fn of listeners) fn();
+    }
+  };
+}
+
+test('workspace-explorer lists directories folders-first, filters files, previews code/notebooks, and enforces workspace containment', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-explorer-'));
+  try {
+    const dataDir = join(root, 'data');
+    const appDir = join(root, 'app');
+    const homeDir = join(root, 'home');
+    const projDir = join(homeDir, 'projects', 'demo-multimodal');
+    const outsideDir = join(root, 'outside');
+    const sshDir = join(homeDir, '.ssh');
+
+    mkdirSync(join(projDir, 'experiment', 'fold1'), { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    mkdirSync(sshDir, { recursive: true });
+    writeFileSync(join(projDir, 'README.md'), '# Demo Project\nHello world\n');
+    writeFileSync(join(projDir, 'experiment', 'fold1', 'summary.ipynb'), JSON.stringify({
+      cells: [
+        { cell_type: 'markdown', source: ['## Ablation Summary\n'] },
+        { cell_type: 'code', execution_count: 2, source: ['print(0.952)\n'], outputs: [{ text: ['0.952\n'] }] }
+      ]
+    }));
+    writeFileSync(join(projDir, 'experiment', 'fold1', 'report.pdf'), '%PDF-1.4 binary mock');
+    writeFileSync(join(outsideDir, 'secret.txt'), 'outside secret');
+    writeFileSync(join(sshDir, 'id_ed25519'), 'PRIVATE KEY');
+
+    try {
+      symlinkSync(outsideDir, join(projDir, 'escape-link'), 'dir');
+    } catch { /* Symlinks on restricted Windows setups are optional. */ }
+
+    const explorer = createWorkspaceExplorer({
+      dataDir,
+      appDir,
+      homeDir,
+      platform: process.platform,
+      runCommand: async (_cmd, args) => {
+        if (String(args.join(' ')).includes('choose folder')) {
+          return { ok: true, code: 0, stdout: `${projDir}\n`, stderr: '' };
+        }
+        return { ok: false, code: 1, stdout: '', stderr: 'User canceled (-128)' };
+      }
+    });
+
+    const picked = await explorer.pickFolder();
+    assert.equal(picked.cancelled, false);
+    assert.equal(picked.name, 'demo-multimodal');
+
+    const recents = explorer.recentWorkspaces();
+    assert.equal(recents.length, 1);
+    assert.equal(recents[0].name, 'demo-multimodal');
+
+    const dirListing = explorer.listDir({ rootUri: picked.uri });
+    assert.deepEqual(
+      dirListing.entries.map(e => `${e.isDirectory ? 'd' : 'f'}:${e.name}`),
+      ['d:experiment', 'f:README.md']
+    );
+
+    assert.throws(() => explorer.listDir({ rootUri: picked.uri, relPath: '../../outside' }), /超出当前工作区|不存在/);
+    assert.throws(() => explorer.mountWorkspace(sshDir), /敏感/);
+
+    const searched = explorer.searchFiles({ rootUri: picked.uri, query: 'summary' });
+    assert.equal(searched.entries.length, 1);
+    assert.equal(searched.entries[0].relPath, 'experiment/fold1/summary.ipynb');
+
+    const textPrev = explorer.readFilePreview({
+      rootUri: picked.uri,
+      fileUri: pathToFileURL(join(projDir, 'README.md')).href
+    });
+    assert.equal(textPrev.kind, 'text');
+    assert.match(textPrev.content, /Demo Project/);
+
+    const nbPrev = explorer.readFilePreview({
+      rootUri: picked.uri,
+      fileUri: searched.entries[0].uri
+    });
+    assert.equal(nbPrev.kind, 'notebook');
+    assert.equal(nbPrev.cells.length, 2);
+    assert.match(nbPrev.cells[1].output, /0\.952/);
+
+    const binPrev = explorer.readFilePreview({
+      rootUri: picked.uri,
+      fileUri: pathToFileURL(join(projDir, 'experiment', 'fold1', 'report.pdf')).href
+    });
+    assert.equal(binPrev.kind, 'binary');
+
+    assert.throws(() => explorer.readFilePreview({
+      rootUri: picked.uri,
+      fileUri: pathToFileURL(join(outsideDir, 'secret.txt')).href
+    }), /不在当前已授权/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('aux-file-tree removes legacy right-rail attributes, registers into native customSidePanels, and browses/previews files', async () => {
+  assert.equal(/^\s*(?:import|export)\b/m.test(auxTreeSource), false);
+  assert.equal(auxTreeSource.includes('\u00b7'), false);
+  assert.equal(toZhTw(auxTreeSource).includes('\u00b7'), false);
+
+  const bundled = nativeSource('https://127.0.0.1:41234', ['a']);
+  assert.ok(bundled.includes('__agyCreateAuxFileTree'));
+  assert.equal(bundled.includes('__agyCreateRightRail'), false);
+
+  const demoUri = 'file:///Users/test/demo-repo';
+  const h = createAuxTreeHarness({
+    workspaceUri: '',
+    recentWorkspaces: [{ uri: demoUri, path: '/Users/test/demo-repo', name: 'demo-repo', updatedAtMs: 100 }],
+    requestHandler: async (method, payload) => {
+      if (method === 'workspace.recent') return { ok: true, workspaces: payload.clientWorkspaces };
+      if (method === 'workspace.mount') return { ok: true, uri: payload.uri, name: 'demo-repo', path: '/Users/test/demo-repo' };
+      if (method === 'workspace.listDir') {
+        return {
+          ok: true,
+          rootUri: demoUri,
+          rootName: 'demo-repo',
+          rootPath: '/Users/test/demo-repo',
+          entries: [
+            { name: 'experiment', relPath: 'experiment', uri: `${demoUri}/experiment`, isDirectory: true },
+            { name: 'summary.ipynb', relPath: 'summary.ipynb', uri: `${demoUri}/summary.ipynb`, isDirectory: false }
+          ]
+        };
+      }
+      if (method === 'workspace.readFile') {
+        return {
+          ok: true,
+          kind: 'text',
+          name: 'summary.ipynb',
+          path: '/Users/test/demo-repo/summary.ipynb',
+          uri: payload.fileUri,
+          size: 42,
+          content: 'notebook preview text'
+        };
+      }
+      if (method === 'file.attach') {
+        return { ok: true, uri: payload.uri };
+      }
+      return { ok: true };
+    }
+  });
+
+  // Cleans up any legacy right-rail attributes and registers native aux-pane entry
+  assert.equal(h.rootAttrs.has('data-agy-right-rail'), false);
+  assert.equal(h.rootAttrs.has('data-agy-right-rail-open'), false);
+  h.auxTree.sync({ enabled: true });
+  const descriptor = h.customSidePanels.get('agyFileTree');
+  assert.ok(descriptor);
+  assert.equal(descriptor.icon, 'folder');
+  assert.equal(descriptor.plusMenuEntry?.label, '文件结构');
+  assert.equal(descriptor.plusMenuEntry?.icon, 'folder');
+  assert.equal(descriptor.hideFindInPane, true);
+
+  // Unlinked conversation renders folder picker + recent projects inside the aux pane
+  let tree = await h.render();
+  assert.ok(findByTestId(tree, 'agy-ftree-pick-folder'));
+  const recentBtn = findByTestId(tree, 'agy-ftree-recent-item');
+  assert.ok(recentBtn);
+  assert.match(collectText(recentBtn), /demo-repo/);
+
+  // Mounting a recent project displays filter input + folder-first file tree
+  await recentBtn.props.onClick();
+  tree = await h.render();
+  assert.ok(findByTestId(tree, 'agy-ftree-filter'));
+  const fileRows = findAllByTestId(tree, 'agy-ftree-file-row');
+  assert.equal(fileRows.length, 1);
+  assert.match(collectText(fileRows[0]), /summary\.ipynb/);
+
+  // Right-click triggers native file context menu
+  fileRows[0].props.onContextMenu({
+    clientX: 120,
+    clientY: 200,
+    currentTarget: {},
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  assert.equal(h.contextMenus.length, 1);
+  assert.equal(h.contextMenus[0].uri, `${demoUri}/summary.ipynb`);
+
+  // Clicking file row opens inline preview and supports attaching to chat
+  await fileRows[0].props.onClick();
+  tree = await h.render();
+  const previewNode = findByTestId(tree, 'agy-ftree-preview');
+  assert.ok(previewNode);
+  assert.match(collectText(previewNode), /notebook preview text/);
+  findByTestId(tree, 'agy-ftree-preview-attach').props.onClick({ currentTarget: {} });
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(h.attachedFiles.length, 1);
+
+  // Disabling or disposing removes the entry from customSidePanels cleanly
+  h.auxTree.sync({ enabled: false });
+  assert.equal(h.customSidePanels.has('agyFileTree'), false);
+  h.auxTree.sync({ enabled: true });
+  assert.equal(h.customSidePanels.has('agyFileTree'), true);
+  h.auxTree.dispose();
+  assert.equal(h.customSidePanels.has('agyFileTree'), false);
+});

@@ -84,6 +84,9 @@ test('settings persist, merge safely, and reject unknown options without changin
     assert.equal(store.get().priorityWindow, '24h');
     assert.equal(store.get().priorityMaxItems, 5);
     assert.equal(store.get().sidebarProjectPin, true);
+    assert.equal(store.get().auxFileTree, true);
+    store.set({ auxFileTree: false }); assert.equal(store.get().auxFileTree, false);
+    store.set({ auxFileTree: true }); assert.equal(store.get().auxFileTree, true);
     for (const rows of [3, 4, 5]) {
       store.set({ priorityVisibleRows: rows });
       assert.equal(createSettingsStore(directory).get().priorityVisibleRows, rows);
