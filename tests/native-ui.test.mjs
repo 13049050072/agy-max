@@ -794,6 +794,27 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   assert.equal(prevented, true);
   assert.equal(capturedEnv.consumeRequestedTab(), 'search');
 
+  // Right-clicking a Priority item opens its native row menu, anchored at the cursor until the menu closes
+  let watcher = null, kebabClicks = 0, expanded = 'false';
+  p.context.MutationObserver = class { constructor(cb) { watcher = cb; } observe() {} disconnect() { watcher = null; } };
+  p.context.DOMRect = class { constructor(x, y) { Object.assign(this, { x, y, width: 0, height: 0 }); } };
+  p.context.CSS = { escape: s => s };
+  const kebab = { getAttribute: () => expanded, click() { kebabClicks++; expanded = 'true'; } };
+  const nativeRow = { querySelector: sel => sel.includes('More options') ? kebab : {} };
+  const baseQuery = p.document.querySelector;
+  p.document.querySelector = sel => sel === '.agy-sidebar-row a[href^="/c/run-older"]' ? { closest: () => nativeRow } : baseQuery(sel);
+  let ctxPrevented = false;
+  for (const fn of p.callbacks.get('contextmenu')) {
+    fn({ clientX: 120, clientY: 340, target: { closest: sel => sel.includes('agy-sidebar-focus-item') ? { dataset: { conversationId: 'run-older' } } : null }, preventDefault() { ctxPrevented = true; }, stopPropagation() {} });
+  }
+  assert.equal(ctxPrevented, true);
+  assert.equal(kebabClicks, 1);
+  assert.deepEqual({ ...kebab.getBoundingClientRect() }, { x: 120, y: 340, width: 0, height: 0 });
+  expanded = 'false';
+  watcher();
+  assert.equal(Object.hasOwn(kebab, 'getBoundingClientRect'), false);
+  p.document.querySelector = baseQuery;
+
   // jumpToSearchHit navigates to target conversation and scrolls to matched turn
   capturedEnv.jumpToSearchHit({ conversationId: 'run-older', projectId: 'p-ops', stepIndexStart: 14 });
   await new Promise(r => setTimeout(r, 10));
