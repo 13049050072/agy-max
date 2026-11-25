@@ -2,7 +2,7 @@
   <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
   <h1>Antigravity Max (<code>agy-max</code>)</h1>
   <p><strong>Antigravity 2.0 满血原生全能工作台增强插件（已全面适配最新版 Antigravity 2.35.1+）</strong></p>
-  <p>默认内置 <code>agy-fast</code> 加速引擎（可随时关闭） / 原生辅助侧栏文件结构 / 类 Codex 全套工作流 / Prism 光学美化与工作台 / 多语言汉化 / 上下文与用量看板 / 多账号切换 / 免 TUN 代理 / SSH 与 WSL2 支持</p>
+  <p>默认内置 <code>agy-fast</code> 加速引擎（可随时关闭） / 原生辅助侧栏文件结构 / 类 Codex 全套工作流 / Prism 光学美化与工作台 / 多语言汉化 / 上下文与用量看板 / 多账号切换 / 免 TUN 代理 / 远程 SSH 支持</p>
   <!-- plugin-badges:start -->
   <p>
     <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
@@ -10,7 +10,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/github/license/wangbingnan136/agy-max?label=License&color=16a34a" height="20" alt="MIT License" /></a>
     <img src="https://img.shields.io/badge/Antigravity-2.35.1+-0f172a" height="20" alt="Antigravity 2.35.1+" />
     <img src="https://img.shields.io/badge/Node.js-%3E%3D22.13-339933" height="20" alt="Node.js >= 22.13" />
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WSL2-475569" height="20" alt="Platform" />
+    <img src="https://img.shields.io/badge/Platform-macOS%20(Tested)%20%7C%20Windows%20(Untested)-475569" height="20" alt="Platform" />
   </p>
   <!-- plugin-badges:end -->
   <p>
@@ -45,7 +45,7 @@
 | **[RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism)** | **交互与光学规格借鉴**：深浅光学配色体系、场景一键预设、水波试管上下文指示器、推理档位滑杆、长代码折叠、行内步骤 Diff、会话文件夹与本地壁纸/桌宠理念 | 基于公开功能规格独立净室重实现（详见 [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)） |
 | **[INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)** | **默认内置加速套件**：内置打包 `batch_search`、`apply_edits`、`quick_outline`、`read_slices`、`run_checks` 与 `SessionStart` 启动快照，大幅减少 Agent 工具往返轮次与 Token 消耗 | MIT License（默认自动部署启用，可在 **Antigravity Max -> 设置 -> 会话增强** 随时一键关闭） |
 
-在此基础上，`Antigravity Max` 进一步自研整合了**输入框下置 Git 与遥测状态栏、本地 + SSH 历史全文搜索（`⌘+⌥+F`）、运行中会话铃铛与侧栏「优先事项」、`/goal` 常驻目标栏与实时编辑抽屉、完整工具链 Markdown 复制、外部编辑器行列直达及 SSH 连接命令粘贴解析**等全套类 Codex 重度工程流特性。
+在此基础上，`Antigravity Max` 进一步自研整合了**输入框下置 Git 与遥测状态栏、本地 + SSH 历史全文搜索（`⌘+⌥+F`）、运行中会话铃铛与侧栏「优先事项」、`/goal` 常驻目标栏与实时编辑抽屉、完整工具链 Markdown 复制、外部编辑器行列直达及 SSH 连接命令粘贴解析**等全套类 Codex 重度工程流特性。也感谢 [LINUX DO](https://linux.do) 社区在日常工具折腾与开源交流中提供的启发。
 
 ---
 
@@ -122,14 +122,14 @@
 - **会话分支、原位编辑与完整 Markdown 导出**：从任意历史回答或会话菜单完整分支新会话（支持含子智能体会话）；在原位置编辑已发消息重发；支持整段或截至指定轮次复制完整会话 Markdown（含工具参数、结果与长文本补全，兼容 SSH）。
 - **多语言深度汉化**：覆盖侧栏、常用菜单、权限弹窗、模型说明、设置页与 Swarm 面板，不改动聊天正文与代码块。
 - **多账号切换与免 TUN 代理（默认关闭）**：基于系统钥匙串 / 凭据管理器隔离多个 Google 账号（支持耗尽自动切号与防串号校验）；无需全局 TUN 即可单独为 Antigravity 注入 HTTP/SOCKS5 代理并可选开启 `GODEBUG=http2client=0`。
-- **SSH 一键粘贴、远端同步与 WSL2 支持**：在「新建项目 -> SSH Host」粘贴 `ssh -p 2222 user@host` 自动解析填入（自动丢弃末尾密码防误交）；桌面端直读 SSH 远端会话统计无需服务端装插件；完整支持 Windows + WSL2（NAT / Mirrored）。
-- **原生辅助侧栏「文件结构」与外部编辑器行列直达**：在客户端右侧原生辅助侧栏集成「**文件结构**」标签页（支持实时筛选、逐层目录树、代码 / 图片 / `.ipynb` 预览，未绑定工作区的对话也可直接选择文件夹或挂载最近项目）；右键消息文件链接或文件树可一键引用到输入框、在 `Cursor` / `VS Code` / `Windsurf` / `Zed` 中打开并直达指定行列、定位文件夹或复制路径（支持 Windows 局域网 NAS / SMB）。
+- **SSH 一键粘贴与远端同步**：在「新建项目 -> SSH Host」粘贴 `ssh -p 2222 user@host` 自动解析填入（自动丢弃末尾密码防误交）；桌面端直读远端 SSH 会话统计，无需服务端额外装插件。
+- **原生辅助侧栏「文件结构」与外部编辑器行列直达**：在客户端右侧原生辅助侧栏集成「**文件结构**」标签页（支持实时筛选、逐层目录树、代码 / 图片 / `.ipynb` 预览，未绑定工作区的对话也可直接选择文件夹或挂载最近项目）；右键消息文件链接或文件树可一键引用到输入框、在 `Cursor` / `VS Code` / `Windsurf` / `Zed` 中打开并直达指定行列、定位文件夹或复制路径。
 
 ---
 
 ## 安装与卸载
 
-> 环境要求：已全面适配最新版 Antigravity（`2.35.1+`），请先安装并启动过一次客户端。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置；若本机已有用户自行安装的 `agy-fast`，也会智能兼容不破坏原有自定义规则。
+> 环境与平台说明：已全面适配最新版 Antigravity（`2.35.1+`），请先安装并启动过一次客户端。**本项目目前主要在 macOS 上开发与实测**；仓库内保留了来自上游与兼容逻辑的 Windows 脚本（`install.ps1` / WSL2 相关桥接），但**未在 Windows 真机实测**，欢迎 Windows 用户体验并反馈 Issue / PR；**Linux Desktop** 因桌面端用户较少，目前**暂不考虑专门适配与维护**。优先使用本机 Node.js `>= 22.13`，没有时自动使用客户端自带的 `agy-node`，无需 `npm install` 或管理员权限。若已装有 `agy-powertools`，安装时会自动停用旧版并无损迁移设置与多账号配置；若本机已有用户自行安装的 `agy-fast`，也会智能兼容不破坏原有自定义规则。
 
 ### 方式一：一句话发给 Agent 自动安装（最推荐）
 
@@ -145,14 +145,14 @@
 
 从 [Releases](https://github.com/wangbingnan136/agy-max/releases) 下载最新 ZIP 解压（或克隆本仓库），在项目目录运行：
 
-```powershell
-# Windows (PowerShell)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```sh
+# macOS（主力开发与实测环境；Linux Desktop 暂不维护）
+sh ./install.sh
 ```
 
-```sh
-# macOS / Linux / WSL2
-sh ./install.sh
+```powershell
+# Windows PowerShell（保留自上游，未做真机实测，仅供参考）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 覆盖安装会保留已有设置，不会强制关闭客户端。完成当前任务后重启 Antigravity，左侧栏出现 **Antigravity Max** 即可使用。macOS 会自动在 `~/Applications/Antigravity (Max).app` 生成带原版图标的启动器，拖入 Dock 替代原图标即可。
@@ -160,7 +160,7 @@ sh ./install.sh
 ### 更新与卸载
 
 - **应用内更新**：打开 **Antigravity Max -> 设置 -> 关于 -> 检查更新**，点击 **立即更新** 自动完成 SHA-256 校验与替换，启动失败会自动回滚旧版。
-- **卸载**：运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1`（Windows）或 `sh ./uninstall.sh`（macOS / Linux / WSL2）。末尾加 `--keep-settings` 可保留个人配置。卸载时会自动清理本插件托管的组件，同时完整保留你之前独立安装的插件、聊天记录和账号。
+- **卸载**：运行 `sh ./uninstall.sh`（macOS）或 `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1`（Windows，未实测）。末尾加 `--keep-settings` 可保留个人配置。卸载时会自动清理本插件托管的组件，同时完整保留你之前独立安装的插件、聊天记录和账号。
 
 ---
 
@@ -204,4 +204,5 @@ sh ./install.sh
 ## 协议与链接
 
 - **开源协议**：[MIT License](LICENSE)（第三方组件声明见 [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt)）
+- **社区交流**：[LINUX DO](https://linux.do)
 - **问题反馈**：[GitHub Issues](https://github.com/wangbingnan136/agy-max/issues)（提交时请附上操作系统、Antigravity 版本和插件版本）

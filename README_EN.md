@@ -2,7 +2,7 @@
   <img src="assets/logo.svg" width="72" height="72" alt="Antigravity Max Logo" />
   <h1>Antigravity Max (<code>agy-max</code>)</h1>
   <p><strong>All-in-one flagship native workbench for Antigravity 2.0 — fully adapted for the latest Antigravity (2.35.1+)</strong></p>
-  <p>Built-in <code>agy-fast</code> accelerator (toggleable anytime) / Native Side Panel File Tree / Codex-style workflow suite / Prism optics &amp; workbench / Multilingual UI / Context &amp; usage dashboard / Multi-account switcher / No-TUN proxy / SSH &amp; WSL2</p>
+  <p>Built-in <code>agy-fast</code> accelerator (toggleable anytime) / Native Side Panel File Tree / Codex-style workflow suite / Prism optics &amp; workbench / Multilingual UI / Context &amp; usage dashboard / Multi-account switcher / No-TUN proxy / Remote SSH</p>
   <!-- plugin-badges:start -->
   <p>
     <a href="https://github.com/wangbingnan136/agy-max/releases"><img src="https://img.shields.io/github/v/release/wangbingnan136/agy-max?label=Release&color=4f46e5" height="20" alt="Release" /></a>
@@ -10,7 +10,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/github/license/wangbingnan136/agy-max?label=License&color=16a34a" height="20" alt="MIT License" /></a>
     <img src="https://img.shields.io/badge/Antigravity-2.35.1+-0f172a" height="20" alt="Antigravity 2.35.1+" />
     <img src="https://img.shields.io/badge/Node.js-%3E%3D22.13-339933" height="20" alt="Node.js >= 22.13" />
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WSL2-475569" height="20" alt="Platform" />
+    <img src="https://img.shields.io/badge/Platform-macOS%20(Tested)%20%7C%20Windows%20(Untested)-475569" height="20" alt="Platform" />
   </p>
   <!-- plugin-badges:end -->
   <p>
@@ -45,7 +45,7 @@
 | **[RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism)** | **Optical &amp; workbench inspiration**: Light/dark optical palettes, scene presets, liquid vial context indicator, reasoning effort slider, code-block folding, inline step diffs, chat folders, and wallpaper/mascot concepts | Clean-room MIT implementation inspired by public feature specs (see [docs/PRISM_COMPATIBILITY.md](docs/PRISM_COMPATIBILITY.md)) |
 | **[INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)** | **Built-in default accelerator**: Bundles `batch_search`, `apply_edits`, `quick_outline`, `read_slices`, `run_checks`, and `SessionStart` workspace snapshots to cut LLM round trips and token usage | MIT License (enabled by default; toggle off anytime in **Antigravity Max -> Settings -> Conversation enhancements**) |
 
-On top of these foundations, `Antigravity Max` adds an **under-card Git &amp; telemetry status strip, millisecond local + SSH full-text session search (`Cmd+Opt+F`), active-sessions bell &amp; sidebar `Priority` view, persistent `/goal` tracker &amp; live editor drawer, full tool-chain Markdown export, external editor `line:col` jump, and SSH command paste parsing**.
+On top of these foundations, `Antigravity Max` adds an **under-card Git &amp; telemetry status strip, millisecond local + SSH full-text session search (`Cmd+Opt+F`), active-sessions bell &amp; sidebar `Priority` view, persistent `/goal` tracker &amp; live editor drawer, full tool-chain Markdown export, external editor `line:col` jump, and SSH command paste parsing**. Thanks also to the [LINUX DO](https://linux.do) community for tooling discussions and open-source ecosystem inspiration.
 
 ---
 
@@ -121,15 +121,15 @@ On top of these foundations, `Antigravity Max` adds an **under-card Git &amp; te
 - **Context, speed, and local usage dashboard**: Live context ring (cache reuse, compaction count, Orchestrator per-model bars) and speed dial (`tok/s`, TTFT, model/tool time, estimated session cost) below the composer, paired with the **Antigravity Max** sidebar dashboard (53-week heatmap, per-request log, cache anomaly alerts, and official pricing refresh).
 - **Session branching, inline editing, and full Markdown export**: Fork full-history sessions (including subagent chats), revise sent messages in place, or copy full transcripts (or up to any turn) as complete Markdown including tool call arguments, tool outputs, and restored truncated responses across local and SSH sessions.
 - **Multilingual UI**: Localizes panels, common menus, permission dialogs, model descriptions, settings, and Swarm iframes while leaving chat messages and code blocks untouched.
-- **Multi-account switching and no-TUN proxy (off by default)**: OS keyring isolation across Windows, macOS, Linux, and WSL2 with ownership checks and optional auto-switch on depletion; per-app HTTP/SOCKS5 proxy injection with connectivity testing and `GODEBUG=http2client=0`.
-- **Paste SSH commands, remote sync, and WSL2 support**: Paste `ssh -p 2222 user@host` into Create New Project -> SSH Host to auto-fill `user@host:2222` (safely discarding appended passwords); read remote SSH telemetry over local OpenSSH with zero server installation; full Windows + WSL2 support across NAT and Mirrored modes.
-- **Native Side Panel File Tree and external editor jump**: Integrates a **File Tree** entry and persistent tab right inside Antigravity's native right Side Panel (filter project files, preview code / images / `.ipynb` notebooks, or pick and mount recent folders when no workspace is linked); right-click file links or File Tree rows to attach to chat, jump to exact `line:col` anchors in `Cursor` / `VS Code` / `Windsurf` / `Zed`, reveal in folder, or copy paths (including Windows LAN NAS / SMB shares).
+- **Multi-account switching and no-TUN proxy (off by default)**: OS keyring isolation with ownership checks and optional auto-switch on depletion; per-app HTTP/SOCKS5 proxy injection with connectivity testing and `GODEBUG=http2client=0`.
+- **Paste SSH commands and remote sync**: Paste `ssh -p 2222 user@host` into Create New Project -> SSH Host to auto-fill `user@host:2222` (safely discarding appended passwords); read remote SSH telemetry over local OpenSSH with zero server installation.
+- **Native Side Panel File Tree and external editor jump**: Integrates a **File Tree** entry and persistent tab right inside Antigravity's native right Side Panel (filter project files, preview code / images / `.ipynb` notebooks, or pick and mount recent folders when no workspace is linked); right-click file links or File Tree rows to attach to chat, jump to exact `line:col` anchors in `Cursor` / `VS Code` / `Windsurf` / `Zed`, reveal in folder, or copy paths.
 
 ---
 
 ## Installation
 
-> Requirements: Fully adapted for the latest Antigravity (`2.35.1+`, installed and started at least once). Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` setups are migrated seamlessly, and pre-existing standalone `agy-fast` setups are preserved safely.
+> Requirements &amp; platform support: Fully adapted for the latest Antigravity (`2.35.1+`, installed and started at least once). **Developed and tested primarily on macOS**. Upstream Windows scripts (`install.ps1` / WSL2 helpers) remain in the repository but are **untested on real Windows machines** (feedback and PRs welcome); **Linux Desktop** is not currently planned or maintained due to its small desktop user base. Uses local Node.js `>= 22.13` or falls back to Antigravity's bundled `agy-node`. No `npm install` or admin privileges needed. Existing `agy-powertools` setups are migrated seamlessly, and pre-existing standalone `agy-fast` setups are preserved safely.
 
 ### Option 1: One-line prompt for your Agent (recommended)
 
@@ -145,14 +145,14 @@ See [Agent installation guide](docs/INSTALL_AGENT.md) for details.
 
 Download and extract the latest ZIP from [Releases](https://github.com/wangbingnan136/agy-max/releases) (or clone this repository), then run:
 
-```powershell
-# Windows (PowerShell)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```sh
+# macOS (primary tested platform; Linux Desktop not currently maintained)
+sh ./install.sh
 ```
 
-```sh
-# macOS / Linux / WSL2
-sh ./install.sh
+```powershell
+# Windows PowerShell (retained from upstream, untested)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Restart Antigravity once you finish your current task; **Antigravity Max** will appear in the left sidebar. On macOS, `~/Applications/Antigravity (Max).app` is generated with the native icon so you can drag it into your Dock.
@@ -160,7 +160,7 @@ Restart Antigravity once you finish your current task; **Antigravity Max** will 
 ### Updates and uninstall
 
 - **In-app updates**: Go to **Antigravity Max -> Settings -> About -> Check for updates** and click **Install update**. Packages are SHA-256 verified and roll back automatically if startup fails.
-- **Uninstall**: Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1` (Windows) or `sh ./uninstall.sh` (macOS / Linux / WSL2). Append `--keep-settings` to keep your preferences.
+- **Uninstall**: Run `sh ./uninstall.sh` (macOS) or `powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1` (Windows, untested). Append `--keep-settings` to keep your preferences.
 
 ---
 
@@ -203,4 +203,5 @@ Every setting applies live in **Antigravity Max -> Settings** and saves automati
 ## License &amp; Links
 
 - **License**: [MIT License](LICENSE) (third-party notices in [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt))
+- **Community**: [LINUX DO](https://linux.do)
 - **Issues**: [GitHub Issues](https://github.com/wangbingnan136/agy-max/issues) (please include OS, Antigravity version, and plugin version)
