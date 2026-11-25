@@ -366,6 +366,36 @@ test('aux-file-tree removes legacy right-rail attributes, registers into native 
   assert.equal(h.customSidePanels.has('agyFileTree'), false);
   h.auxTree.sync({ enabled: true });
   assert.equal(h.customSidePanels.has('agyFileTree'), true);
+
+  // New conversation ('') mounting a folder carries it forward when the first message creates /c/conv-new
+  const draftHarness = createAuxTreeHarness({
+    conversationId: '',
+    workspaceUri: '',
+    recentWorkspaces: [{ uri: demoUri, path: '/Users/test/demo-repo', name: 'demo-repo', updatedAtMs: 100 }],
+    requestHandler: async (method, payload) => {
+      if (method === 'workspace.recent') return { ok: true, workspaces: payload.clientWorkspaces };
+      if (method === 'workspace.mount') return { ok: true, uri: payload.uri, name: 'demo-repo', path: '/Users/test/demo-repo' };
+      if (method === 'workspace.listDir') {
+        return {
+          ok: true,
+          rootUri: demoUri,
+          rootName: 'demo-repo',
+          rootPath: '/Users/test/demo-repo',
+          entries: [{ name: 'README.md', relPath: 'README.md', uri: `${demoUri}/README.md`, isDirectory: false }]
+        };
+      }
+      return { ok: true };
+    }
+  });
+  draftHarness.auxTree.sync({ enabled: true });
+  let draftTree = await draftHarness.render();
+  await findByTestId(draftTree, 'agy-ftree-recent-item').props.onClick();
+  draftTree = await draftHarness.render();
+  assert.ok(findByTestId(draftTree, 'agy-ftree-filter'));
+  draftHarness.setConversation('conv-created-from-draft', '');
+  draftTree = await draftHarness.render();
+  assert.ok(findByTestId(draftTree, 'agy-ftree-filter'));
+
   h.auxTree.dispose();
   assert.equal(h.customSidePanels.has('agyFileTree'), false);
 });

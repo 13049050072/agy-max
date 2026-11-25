@@ -77,6 +77,40 @@ test('Sidecar Web UI enforces Host, Origin/Sec-Fetch-Site checks, and fails clos
     const badHost = await rawHttpRequest({ port, path: '/', headers: { Host: `evil.example:${port}` } });
     assert.equal(badHost.status, 403);
 
+    const subdomainHost = await rawHttpRequest({ port, path: '/', headers: { Host: `evil.localhost:${port}` } });
+    assert.equal(subdomainHost.status, 403);
+
+    const otherPortOriginMismatch = await rawHttpRequest({
+      port,
+      method: 'POST',
+      path: '/api/relaunch',
+      headers: { Host: `127.0.0.1:${port}`, Origin: 'http://127.0.0.1:65000', 'x-sidecar-token': 'secret-token' }
+    });
+    assert.equal(otherPortOriginMismatch.status, 403);
+
+    // Antigravity 2.35+ proxies sidecar views via plugin://agy-max--inspector-<gatewayPort>/
+    const pluginPageOk = await rawHttpRequest({
+      port,
+      path: '/?token=secret-token',
+      headers: { Host: 'agy-max--inspector-52150' }
+    });
+    assert.equal(pluginPageOk.status, 200);
+    assert.match(pluginPageOk.body, /Antigravity Max 1\.1\.0/);
+
+    const pluginPostOk = await rawHttpRequest({
+      port,
+      method: 'POST',
+      path: '/api/relaunch',
+      headers: {
+        Host: 'agy-max--inspector-52150',
+        Origin: 'plugin://agy-max--inspector-52150',
+        'Sec-Fetch-Site': 'same-origin',
+        'x-sidecar-token': 'secret-token'
+      }
+    });
+    assert.equal(pluginPostOk.status, 200);
+    assert.equal(relaunches, 1);
+
     const crossOrigin = await rawHttpRequest({
       port,
       method: 'POST',
@@ -108,7 +142,7 @@ test('Sidecar Web UI enforces Host, Origin/Sec-Fetch-Site checks, and fails clos
       headers: { Host: `127.0.0.1:${port}`, 'Sec-Fetch-Site': 'same-site', 'x-sidecar-token': 'secret-token' }
     });
     assert.equal(sameSiteOtherPort.status, 403);
-    assert.equal(relaunches, 0);
+    assert.equal(relaunches, 1);
 
     const sameOriginOk = await rawHttpRequest({
       port,
@@ -122,7 +156,7 @@ test('Sidecar Web UI enforces Host, Origin/Sec-Fetch-Site checks, and fails clos
       }
     });
     assert.equal(sameOriginOk.status, 200);
-    assert.equal(relaunches, 1);
+    assert.equal(relaunches, 2);
   } finally {
     await close();
   }

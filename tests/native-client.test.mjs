@@ -1106,6 +1106,56 @@ test('installPage defers routeTree rebuild during initial router transition and 
   assert.equal(loadCalls, 1);
 });
 
+test('canToggleAuxPane, toggleAuxPane, and project-scoped draft workspaceUri work on new conversation routes', () => {
+  const executed = [];
+  const commandsService = {
+    hasHandler: id => id === 'toggleAuxPane',
+    executeCommand: id => executed.push(id)
+  };
+  const storeObj = {
+    getState: () => ({
+      trajectorySummaries: {
+        summaries: {
+          'c-old': {
+            lastModifiedTime: { seconds: 100 },
+            trajectoryMetadata: {
+              projectId: 'proj-1',
+              workspaces: [{ workspaceFolderAbsoluteUri: 'file:///Users/test/proj-1-old' }]
+            }
+          },
+          'c-latest': {
+            lastModifiedTime: { seconds: 250 },
+            trajectoryMetadata: {
+              projectId: 'proj-1',
+              workspaces: [{ workspaceFolderAbsoluteUri: 'file:///Users/test/proj-1-latest' }]
+            }
+          }
+        }
+      }
+    }),
+    dispatch() {}
+  };
+  const rootEl = {
+    '__reactFiber$aux': {
+      tag: 10,
+      memoizedProps: { value: { store: storeObj, core: { commandsService } } },
+      return: null
+    }
+  };
+  const context = vm.createContext({
+    URLSearchParams,
+    location: { pathname: '/', search: '?project=proj-1' },
+    document: { querySelector: sel => sel === '#root' ? { firstElementChild: rootEl } : null }
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const adapter = context.__agyNativeAdapter;
+
+  assert.equal(adapter.canToggleAuxPane(), true);
+  assert.equal(adapter.toggleAuxPane(), true);
+  assert.deepEqual(executed, ['toggleAuxPane']);
+  assert.equal(adapter.workspaceUri(''), 'file:///Users/test/proj-1-latest');
+});
+
 test('resumeGoalInvocation dispatches continuation via matching ChatContext.sendMessage without disturbing subagent composers', async () => {
   const sent = [];
   const subCard = {
