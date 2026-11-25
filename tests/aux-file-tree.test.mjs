@@ -184,18 +184,38 @@ test('workspace-explorer lists directories folders-first, filters files, preview
       symlinkSync(outsideDir, join(projDir, 'escape-link'), 'dir');
     } catch { /* Symlinks on restricted Windows setups are optional. */ }
 
+    const runCommand = async (cmd, args) => {
+      const commandLine = `${cmd} ${(args || []).join(' ')}`;
+      if (
+        commandLine.includes('choose folder') ||
+        commandLine.includes('FolderBrowserDialog') ||
+        commandLine.includes('--directory')
+      ) {
+        return { ok: true, code: 0, stdout: `${projDir}\n`, stderr: '' };
+      }
+      return { ok: false, code: 1, stdout: '', stderr: 'User canceled (-128)' };
+    };
+
     const explorer = createWorkspaceExplorer({
       dataDir,
       appDir,
       homeDir,
       platform: process.platform,
-      runCommand: async (_cmd, args) => {
-        if (String(args.join(' ')).includes('choose folder')) {
-          return { ok: true, code: 0, stdout: `${projDir}\n`, stderr: '' };
-        }
-        return { ok: false, code: 1, stdout: '', stderr: 'User canceled (-128)' };
-      }
+      runCommand
     });
+
+    for (const targetPlatform of ['darwin', 'win32', 'linux']) {
+      const crossExplorer = createWorkspaceExplorer({
+        dataDir: join(root, `data-${targetPlatform}`),
+        appDir,
+        homeDir,
+        platform: targetPlatform,
+        runCommand
+      });
+      const crossPicked = await crossExplorer.pickFolder();
+      assert.equal(crossPicked.cancelled, false);
+      assert.equal(crossPicked.name, 'demo-multimodal');
+    }
 
     const picked = await explorer.pickFolder();
     assert.equal(picked.cancelled, false);

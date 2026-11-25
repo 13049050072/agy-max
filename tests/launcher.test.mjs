@@ -1015,7 +1015,7 @@ test('macOS bundle discovery skips nested Antigravity Helper.app and Antigravity
 
     configureLaunchers({ home, dataDir, platform: 'darwin', sandbox: true, execPath: helperExe });
     const launcherScript = readFileSync(maxLauncherExe, 'utf8');
-    assert.ok(launcherScript.includes(outerApp));
+    assert.ok(launcherScript.includes(outerApp.replace(/(["\\$`])/g, '\\$1')));
     assert.equal(launcherScript.includes('Antigravity Helper.app'), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
