@@ -569,8 +569,14 @@ test('setSidebarProjectPin enables Codex-style project pinning, orders loose pin
   };
   let renderedHeaderProps=null;
   const nativeProjectHeader=props=>{renderedHeaderProps=props;return props;};
+  let hookCalls=0,storageListeners=0;
+  const storageService={
+    get:key=>key==='pinnedProjectIds'?JSON.stringify(pinnedIds):key==='pinned_workspace_row_order'?'{}':undefined,
+    onDidChange:()=>{storageListeners++;return()=>{storageListeners--;};}
+  };
+  const pageEl={'__reactFiber$p':{tag:10,memoizedProps:{value:{core:{storageService}}},return:null}};
   const context=vm.createContext({
-    document:{querySelector:()=>null},
+    document:{querySelector:sel=>sel==='#root'?{firstElementChild:pageEl}:null},
     __agyNativeBindings:{
       names:{
         resolve:'sjc',
@@ -580,16 +586,14 @@ test('setSidebarProjectPin enables Codex-style project pinning, orders loose pin
         sidebarData:'Bkd',
         projectHeader:'Tld',
         pinnedProjectsHook:'Uic',
-        togglePinProjectHook:'Wic',
-        pinnedWorkspaceOrderHook:'Ric'
+        togglePinProjectHook:'Wic'
       }
     },
     VWc:nativeSidebarItems,
     Bkd:nativeSidebarData,
     Tld:nativeProjectHeader,
-    Uic:()=>[pinnedIds,()=>{}],
-    Wic:()=>togglePin,
-    Ric:()=>[{},()=>{}]
+    Uic:()=>{hookCalls++;return [pinnedIds,()=>{}];},
+    Wic:()=>togglePin
   });
   vm.runInContext(readFileSync(new URL('../lib/native-client.js',import.meta.url),'utf8'),context);
   const adapter=context.__agyNativeAdapter;
@@ -600,6 +604,9 @@ test('setSidebarProjectPin enables Codex-style project pinning, orders loose pin
     {id:'proj-b',label:'instabox管理工具',items:Array.from({length:7},(_,i)=>({cascadeId:`b${i}`}))}
   ];
   const res=context.Bkd({groups:allGroups,includePinnedSection:true,archivedOnly:false,pinnedProjectIds:[]});
+  // sidebarData is swapped in after the sidebar mounted, so it must read storage instead of calling hooks (React #311).
+  assert.equal(hookCalls,0);
+  assert.equal(storageListeners,1);
   // Pinned project moves out of unpinned groups into pinnedWorkspaces
   assert.deepEqual(Array.from(res.groups,g=>g.id),['proj-a']);
   assert.deepEqual(Array.from(res.pinnedWorkspaces,g=>g.id),['proj-b']);
@@ -623,6 +630,7 @@ test('setSidebarProjectPin enables Codex-style project pinning, orders loose pin
   assert.deepEqual(pinnedIds,[]);
 
   adapter.dispose();
+  assert.equal(storageListeners,0);
   assert.equal(context.VWc,nativeSidebarItems);
   assert.equal(context.Bkd,nativeSidebarData);
   assert.equal(context.Tld,nativeProjectHeader);
