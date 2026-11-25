@@ -72,9 +72,23 @@ test('master switch restores renamed native hooks and reuses saved enhancements 
   adapter.setPragmaticCoding(false);
   assert.deepEqual(Array.from(context.renamedResolve().plannerConfig.promptSectionCustomizationConfig.appendPromptSections,p=>p.title),['powertools_stage_updates','powertools_efficient_io']);
   adapter.setGoalBar(true);
-  adapter.setConversationGoal('conv-goal',{text:'Ship all tests green',status:'active'});
+  adapter.setConversationGoal('conv-goal',{
+    text:'Ship all tests green',
+    status:'active',
+    checklist:[{id:'c1',text:'Update unit tests',done:true},{id:'c2',text:'Run full suite',done:false}],
+    guardrails:['run_tests','minimal_diff']
+  });
   const sentWithGoal=await service.sendUserCascadeMessage({cascadeId:'conv-goal',items:[{chunk:{case:'text',value:'continue'}}]});
-  assert.ok(sentWithGoal.cascadeConfig.plannerConfig.promptSectionCustomizationConfig.appendPromptSections.some(p=>p.title==='powertools_active_goal'&&p.content.includes('Ship all tests green')));
+  const goalPrompt=sentWithGoal.cascadeConfig.plannerConfig.promptSectionCustomizationConfig.appendPromptSections.find(p=>p.title==='powertools_active_goal')?.content||'';
+  assert.ok(goalPrompt.includes('Ship all tests green'));
+  assert.ok(goalPrompt.includes('- [x] Update unit tests')&&goalPrompt.includes('- [ ] Run full suite'));
+  assert.ok(goalPrompt.includes('Execution Guardrails:')&&goalPrompt.includes('smallest necessary surgical changes'));
+  adapter.setConversationGoal('conv-goal',{text:'Ship all tests green',status:'paused',pausedNative:true});
+  const sentWhilePausedNative=await service.sendUserCascadeMessage({cascadeId:'conv-goal',items:[{chunk:{case:'text',value:'继续'}}]});
+  assert.ok(sentWhilePausedNative.cascadeConfig.plannerConfig.promptSectionCustomizationConfig.appendPromptSections.some(p=>p.title==='powertools_active_goal'&&p.content.includes('GOAL_CANCELLED')&&!p.content.includes('<GOAL>')));
+  adapter.setConversationGoal('conv-goal',{text:'Ship all tests green',status:'paused',pausedNative:false});
+  const sentWhilePausedClean=await service.sendUserCascadeMessage({cascadeId:'conv-goal',items:[{chunk:{case:'text',value:'继续'}}]});
+  assert.equal((sentWhilePausedClean.cascadeConfig?.plannerConfig?.promptSectionCustomizationConfig?.appendPromptSections||[]).some(p=>p.title==='powertools_active_goal'),false);
   adapter.setConversationGoal('conv-goal',null);
   adapter.dispose();assert.equal(context.renamedResolve,nativeResolve);assert.equal(context.renamedSegment,nativeSegment);
 });

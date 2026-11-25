@@ -1315,3 +1315,178 @@ test('refresh does not lock settingsLoaded=true if applyOptions throws before mo
 
   p.context.__agyPowertools.dispose();
 });
+
+test('ComposerGoalBar renders floating pill with checklist progress and expands GoalInlineDeck in-place without body drawer', async () => {
+  const p = page(true);
+  p.context.location.pathname = '/c/conv-goal-ui';
+  const renderedByMount = new Map();
+  let stateSlots = [];
+  let slotCursor = 0;
+  const evalTree = rootEl => {
+    slotCursor = 0;
+    const walk = node => {
+      if (node == null || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number') return node;
+      if (Array.isArray(node)) return node.map(walk);
+      if (typeof node.type === 'function') {
+        return walk(node.type(node.props || {}));
+      }
+      return { ...node, children: (node.children || []).map(walk) };
+    };
+    return walk(rootEl);
+  };
+  const findByTestId = (node, id) => {
+    if (!node || typeof node !== 'object') return null;
+    if (Array.isArray(node)) {
+      for (const child of node) { const hit = findByTestId(child, id); if (hit) return hit; }
+      return null;
+    }
+    if (node.props?.['data-testid'] === id) return node;
+    return findByTestId(node.children || [], id);
+  };
+
+  p.context.React = {
+    Fragment: Symbol('Fragment'),
+    createElement: (type, props, ...children) => ({
+      type,
+      props: { ...(props || {}), children: children.length <= 1 ? children[0] : children },
+      children
+    }),
+    useState: init => {
+      const idx = slotCursor++;
+      if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+      const setVal = next => { stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next; };
+      return [stateSlots[idx], setVal];
+    },
+    useEffect: () => {},
+    useLayoutEffect: () => {},
+    useRef: v => ({ current: v })
+  };
+  p.context.HC = ({ children }) => children;
+  p.context.Uy = ({ children, ...props }) => ({ type: 'Button', props, children: Array.isArray(children) ? children : [children] });
+  p.context.getComputedStyle = () => ({ display: 'flex' });
+
+  const makeContainer = () => {
+    const children = [];
+    return {
+      children,
+      insertBefore(node, before) {
+        const cur = children.indexOf(node);
+        if (cur !== -1) children.splice(cur, 1);
+        const idx = before ? children.indexOf(before) : -1;
+        if (idx === -1) children.push(node); else children.splice(idx, 0, node);
+        node.parentElement = this;
+        node.isConnected = true;
+      }
+    };
+  };
+  const inputBox = makeContainer();
+  const footerRow = makeContainer();
+  const card = { isConnected: true, parentElement: null, nextSibling: null, closest: sel => sel === '.surface-composer-card' ? card : null };
+  inputBox.insertBefore(card, null);
+  const modelTrigger = { isConnected: true, parentElement: null, nextSibling: null, closest: sel => sel === '.surface-composer-card' ? card : null };
+  footerRow.insertBefore(modelTrigger, null);
+
+  let bodyAppends = 0;
+  p.document.body.insertBefore = () => { bodyAppends++; };
+  p.document.querySelector = sel => sel === '.surface-composer-card' ? card : null;
+  p.document.querySelectorAll = sel => sel === '[data-testid="model-selector-trigger"]' ? [modelTrigger] : [];
+
+  let savedPayloads = [];
+  let goalState = {
+    text: '重构配额模块并补齐测试',
+    status: 'active',
+    startedAtMs: Date.now() - 85000,
+    updatedAtMs: Date.now() - 10000,
+    stepIndex: 3,
+    checklist: [
+      { id: 'c1', text: '补齐 429 退避逻辑', done: true },
+      { id: 'c2', text: '通过全量单元测试', done: false }
+    ],
+    guardrails: ['run_tests']
+  };
+
+  p.context.__agyNativeAdapter = {
+    wrap: el => el,
+    composerCascadeId: () => 'conv-goal-ui',
+    setConversationGoal() {}
+  };
+  p.context.ReactDOM = {
+    createRoot(mount) {
+      return {
+        render(el) { renderedByMount.set(mount, el); },
+        unmount() { renderedByMount.delete(mount); }
+      };
+    }
+  };
+  p.context.__agyPowertoolsHost = raw => {
+    const req = JSON.parse(raw);
+    if (req.method === 'settings.get') {
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { enabled: true, goalBar: true }));
+      return;
+    }
+    if (req.method === 'state') {
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, {
+        conversationId: 'conv-goal-ui',
+        goal: goalState,
+        turns: [{ stepIndexStart: 3, stepIndexEnd: 4, status: 'complete' }],
+        requests: []
+      }));
+      return;
+    }
+    if (req.method === 'goal.save') {
+      savedPayloads.push(req.payload);
+      goalState = { ...goalState, text: req.payload.text, checklist: req.payload.checklist || [], guardrails: req.payload.guardrails || [], updatedAtMs: Date.now() };
+      queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, { ok: true, goal: goalState }));
+      return;
+    }
+    queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, {}));
+  };
+  p.context.__agyInitialSettings = { enabled: true, goalBar: true };
+  vm.runInContext(source, p.context);
+  await new Promise(r => setTimeout(r, 40));
+
+  const goalMount = inputBox.children[0];
+  assert.equal(goalMount.dataset.agyPowertoolsRoot, 'goal-bar');
+  const pillTree = evalTree(renderedByMount.get(goalMount));
+  assert.equal(pillTree.props['data-testid'], 'agy-goal-bar');
+  assert.equal(pillTree.props.className, 'agy-goal-bar');
+  // Collapsed floating pill hides destructive clear button and displays checklist 1/2 chip
+  assert.equal(findByTestId(pillTree, 'agy-goal-clear-btn'), null);
+  const checkChip = findByTestId(pillTree, 'agy-goal-checklist-chip');
+  assert.ok(checkChip);
+  assert.equal(checkChip.children[0], '✓ 1/2');
+
+  // Clicking edit button expands GoalInlineDeck directly inside the goal-bar slot (zero document.body drawer)
+  stateSlots = [];
+  findByTestId(pillTree, 'agy-goal-edit-btn').props.onClick();
+  assert.equal(bodyAppends, 0);
+  const deckTree = evalTree(renderedByMount.get(goalMount));
+  assert.equal(deckTree.props['data-testid'], 'agy-goal-editor');
+  assert.ok(deckTree.props.className.includes('agy-goal-deck'));
+  assert.ok(findByTestId(deckTree, 'agy-goal-textarea'));
+  assert.ok(findByTestId(deckTree, 'agy-goal-checklist'));
+  assert.ok(findByTestId(deckTree, 'agy-goal-guardrails'));
+  assert.ok(findByTestId(deckTree, 'agy-goal-clear-btn'));
+
+  // Toggle minimal_diff guardrail + type pending checklist item + click Save -> persists both and collapses back to pill
+  const guardrailWrap = findByTestId(deckTree, 'agy-goal-guardrails');
+  const minDiffBtn = guardrailWrap.children.flat(Infinity).find(btn => btn?.props?.['data-guardrail-id'] === 'minimal_diff');
+  minDiffBtn.props.onClick();
+  findByTestId(deckTree, 'agy-goal-checklist-input').props.onChange({ target: { value: '检查无多余文件改动' } });
+  const dirtyDeck = evalTree(renderedByMount.get(goalMount));
+  const saveBtn = findByTestId(dirtyDeck, 'agy-goal-save-btn');
+  assert.equal(saveBtn.props.disabled, false);
+  saveBtn.props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+
+  assert.equal(savedPayloads.length, 1);
+  assert.equal(savedPayloads[0].checklist.length, 3);
+  assert.equal(savedPayloads[0].checklist[2].text, '检查无多余文件改动');
+  assert.deepEqual(savedPayloads[0].guardrails, ['run_tests', 'minimal_diff']);
+
+  stateSlots = [];
+  const collapsedAgain = evalTree(renderedByMount.get(goalMount));
+  assert.equal(collapsedAgain.props['data-testid'], 'agy-goal-bar');
+
+  p.context.__agyPowertools.dispose();
+});
