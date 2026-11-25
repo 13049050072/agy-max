@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync, symlinkSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { pathToFileURL } from 'node:url';
@@ -106,6 +106,36 @@ test('macOS launcher app copies source icon when available, clears stale icon wh
 
     restoreLaunchers({ home, dataDir, platform: 'darwin', sandbox: true });
     assert.equal(existsSync(appDir), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('macOS launcher waits for a quitting Antigravity to exit before opening, but not for a running one', { skip: process.platform !== 'darwin' }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-launcher-quit-'));
+  const runLauncher = (launcher, env) => new Promise(done => spawn(launcher, [], { env, stdio: 'ignore' }).on('exit', done));
+  try {
+    const home = join(root, 'home'), sourceApp = join(root, 'Apps', 'Antigravity.app'), stubDir = join(root, 'stub');
+    const fakeMain = join(sourceApp, 'Contents', 'MacOS', 'Antigravity');
+    const mainLog = join(home, 'Library', 'Logs', 'Antigravity', 'main.log');
+    const openLog = join(root, 'open.log');
+    mkdirSync(dirname(fakeMain), { recursive: true });
+    mkdirSync(dirname(mainLog), { recursive: true });
+    mkdirSync(stubDir, { recursive: true });
+    copyFileSync('/bin/sleep', fakeMain);
+    writeFileSync(join(stubDir, 'open'), '#!/bin/sh\n{ if kill -0 "$FAKE_PID" 2>/dev/null; then echo alive; else echo gone; fi; echo "$@"; } > "$OPEN_LOG"\n', { mode: 0o755 });
+    configureLaunchers({ home, dataDir: join(root, 'data'), platform: 'darwin', sandbox: true, macSourceApp: sourceApp });
+    const launcher = join(home, 'Applications', 'Antigravity (Max).app', 'Contents', 'MacOS', 'launcher');
+
+    for (const [lastLine, expected] of [['Shutting down language server…', 'gone'], ['Starting app (v2) with dynamic port…', 'alive']]) {
+      writeFileSync(mainLog, `[t] [info]  Starting app (v1) with dynamic port…\n[t] [info]  ${lastLine}\n`);
+      const fake = spawn(fakeMain, ['30'], { stdio: 'ignore' });
+      const killer = setTimeout(() => fake.kill(), 600);
+      await runLauncher(launcher, { ...process.env, HOME: home, PATH: `${stubDir}:${process.env.PATH}`, FAKE_PID: String(fake.pid), OPEN_LOG: openLog });
+      clearTimeout(killer);
+      fake.kill();
+      assert.deepEqual(readFileSync(openLog, 'utf8').trim().split('\n'), [expected, `-a ${sourceApp} --args --remote-debugging-port=0`]);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
