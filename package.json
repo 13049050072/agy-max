@@ -17,7 +17,8 @@
     "preview:native": "node scripts/native-preview.mjs",
     "build:calendar": "node scripts/build-calendar.mjs",
     "uninstall:local": "node scripts/uninstall.mjs",
-    "build:release": "node scripts/build-release.mjs"
+    "build:release": "node scripts/build-release.mjs",
+    "build:site": "node scripts/build-site.mjs"
   },
   "dependencies": {
     "react-day-picker": "10.0.2"
