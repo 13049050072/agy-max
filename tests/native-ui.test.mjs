@@ -738,11 +738,16 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   assert.equal(navigated[0].params.cascadeId, 'run-latest');
   assert.ok(renderedTrees.has('sidebar-focus'));
 
-  // Priority actions render real SVG, and promoted rows are hidden only in the native list.
+  // Bell dot is for unread finished replies only: 12 running sessions with nothing unread leave it off
+  const bellAfterSync = bellFnTree.type(bellFnTree.props);
+  assert.match(bellAfterSync.props.title, /12/);
+  assert.equal(bellAfterSync.children.some(c => c?.props?.['data-testid'] === 'agy-sidebar-bell-dot'), false);
+
+  // Priority actions render real SVG, and promoted rows stay visible in the native list.
   const focusTree = renderedTrees.get('sidebar-focus');
   const renderFocus = () => focusTree.type(focusTree.props);
-  const [dedupStyle, focusHeader, focusList] = renderFocus().children;
-  assert.match(dedupStyle.children[0], /\/c\/run-latest/);
+  const [focusHeader, focusList] = renderFocus().children;
+  assert.equal(renderFocus().children.some(c => c?.type === 'style'), false);
   assert.equal(focusList.props['data-testid'], 'agy-priority-list');
   assert.equal(focusList.props.tabIndex, 0);
   const rows = focusList.children[0];
@@ -754,7 +759,7 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   assert.equal(focusList.props.style['--agy-priority-visible-rows'], 5);
   for (const count of [3, 4, 5]) {
     await capturedEnv.change({ priorityVisibleRows: count });
-    const list = renderFocus().children[2];
+    const list = renderFocus().children[1];
     assert.equal(list.props.style['--agy-priority-visible-rows'], count);
     assert.equal(list.children[0].length, 5);
   }
@@ -762,7 +767,7 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   const icon = sliders.children[0];
   assert.equal(icon.type(icon.props).type, 'svg');
   sliders.props.onClick({ preventDefault() {}, stopPropagation() {} });
-  const menu = renderFocus().children[1].children[2];
+  const menu = renderFocus().children[0].children[2];
   assert.equal(menu.children[0].props['data-testid'], 'agy-priority-window-group');
   assert.equal(menu.children[1].props['data-testid'], 'agy-priority-max-group');
   assert.equal(menu.children[3].props['data-testid'], 'agy-sidebar-next-running-btn');
@@ -771,10 +776,10 @@ test('sidebar bell switches to most recent running session, toggles Priority vie
   // Expanding max items via the Priority popover immediately shows up to 10 / 12 items
   const max10Btn = menu.children[1].children[1].children.find(b => b.props['data-testid'] === 'agy-priority-max-10');
   max10Btn.props.onClick();
-  assert.equal(renderFocus().children[2].children[0].length, 10);
-  const max20Btn = renderFocus().children[1].children[2].children[1].children[1].children.find(b => b.props['data-testid'] === 'agy-priority-max-20');
+  assert.equal(renderFocus().children[1].children[0].length, 10);
+  const max20Btn = renderFocus().children[0].children[2].children[1].children[1].children.find(b => b.props['data-testid'] === 'agy-priority-max-20');
   max20Btn.props.onClick();
-  assert.equal(renderFocus().children[2].children[0].length, 12);
+  assert.equal(renderFocus().children[1].children[0].length, 12);
 
   // Cmd+Opt+F triggers Session Search unless inside .xterm terminal
   const keyHandlers = p.callbacks.get('keydown') || [];
