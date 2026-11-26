@@ -690,6 +690,28 @@ test('all 4 optical palettes, dark/light switching, accentTone, userBubbleTint d
   optics.dispose();
 });
 
+test('leaving a custom palette hands the native inline theme colors back instead of deleting them', () => {
+  const m = createMockEnv({ dark: false });
+  m.document.body.classList.add('light');
+  const style = m.document.documentElement.style;
+  style.setProperty('--background', '#FFFFFF');
+  style.setProperty('--card', '#FFFFFF');
+  const optics = m.context.__agyCreateOptics({ options: () => ({ enabled: true, themePalette: 'obsidian' }) });
+  assert.equal(style.getPropertyValue('--background'), '#F4F7FB');
+
+  // The native theme rewrites --card while the palette is on; that newer value must win.
+  style.setProperty('--card', '#EEEEEE');
+  optics.sync({ enabled: true, themePalette: 'native' });
+  assert.equal(style.getPropertyValue('--background'), '#FFFFFF');
+  assert.equal(style.getPropertyValue('--card'), '#EEEEEE');
+  assert.equal(style.getPropertyValue('--foreground'), '');
+
+  optics.sync({ enabled: true, themePalette: 'obsidian' });
+  optics.dispose();
+  assert.equal(style.getPropertyValue('--background'), '#FFFFFF');
+  assert.equal(style.getPropertyValue('--card'), '#EEEEEE');
+});
+
 test('sidebarNavFold folds automations/customizations while keeping /powertools visible, plus studio placeholder & logoInk', () => {
   const m = createMockEnv({ dark: true });
   const nav = m.document.createElement('div');
