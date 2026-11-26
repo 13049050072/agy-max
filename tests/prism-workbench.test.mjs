@@ -896,7 +896,7 @@ test('Thought Translator supports expand vs preload trigger, immersive vs biling
       if (method === 'thought.translate') {
         return {
           ok: true,
-          translated: '仔细检查 foo/bar.ts#L12 和 /abs/path.py:42 以及 https://example.com/a.ts。\n\n然后验证测试。'
+          translated: '仔细检查 foo/bar.ts#L12 和 /abs/path.py:42 以及 C:\\src\\100%.ts:19:7 和 D:/project/a#b.ts:42:2，参考 https://example.com/a.ts。\n\n然后验证测试。'
         };
       }
       if (method === 'thought.translateTitles') {
@@ -941,15 +941,18 @@ test('Thought Translator supports expand vs preload trigger, immersive vs biling
 
   // File path pills clickable and invoke file.openEditor with line numbers (ignoring https URL)
   const pills = box.querySelectorAll('[data-testid="agy-thought-file-pill"]');
-  assert.equal(pills.length, 2);
-  pills[0].click();
-  pills[1].click();
+  assert.equal(pills.length, 4);
+  for (const pill of pills) pill.click();
   await flush();
-  assert.equal(openEditorCalls.length, 2);
+  assert.equal(openEditorCalls.length, 4);
   assert.equal(openEditorCalls[0].uri, 'file:///repo/foo/bar.ts');
   assert.equal(openEditorCalls[0].line, 12);
   assert.equal(openEditorCalls[1].uri, 'file:///abs/path.py');
   assert.equal(openEditorCalls[1].line, 42);
+  assert.deepEqual(JSON.parse(JSON.stringify(openEditorCalls.slice(2))), [
+    { uri: 'file:///C:/src/100%25.ts', line: 19, column: 7, source: 'git' },
+    { uri: 'file:///D:/project/a%23b.ts', line: 42, column: 2, source: 'git' }
+  ]);
 
   // Switch to 'immersive' view -> renders single translated body + toggle original button
   wb.sync({ ...opts, thoughtTrigger: 'expand', thoughtView: 'immersive' });
@@ -1115,6 +1118,26 @@ test('Code Block >= 48 lines folds/expands manually with scrollTop anchor compen
   assert.equal(posixCall.method, 'diff.inline');
   assert.equal(posixCall.payload.path, 'file:///Users/dev/my%20app/%E4%B8%AD%E6%96%87.js');
   assert.equal(posixDiffRow.nextSibling.querySelector('.agy-inline-diff-path').textContent, '/Users/dev/my app/中文.js');
+
+  for (const [path, diffPath, uri] of [
+    ['src/a#b.ts', 'src/a#b.ts', 'file:///ws/src/a%23b.ts'],
+    ['src/100%.ts', 'src/100%.ts', 'file:///ws/src/100%25.ts'],
+    ['C:\\repo\\100%.ts', 'file:///C:/repo/100%25.ts', 'file:///C:/repo/100%25.ts'],
+    ['\\\\wsl.localhost\\Ubuntu\\home\\a#b.ts', 'file://wsl.localhost/Ubuntu/home/a%23b.ts', 'file://wsl.localhost/Ubuntu/home/a%23b.ts'],
+    ['\\\\server\\share\\a b.ts', 'file://server/share/a%20b.ts', 'file://server/share/a%20b.ts']
+  ]) {
+    const row = document.createElement('div');
+    row.setAttribute('data-testid', 'file-change-row');
+    row.setAttribute('data-path', path);
+    convView.appendChild(row);
+    wb.sync();
+    row.querySelector('[data-testid="agy-inline-diff-toggle"]').click();
+    await flush();
+    assert.equal(rpcCalls.at(-1).payload.path, diffPath);
+    row.nextSibling.querySelector('[data-testid="agy-inline-diff-open-editor"]').click();
+    await flush();
+    assert.equal(rpcCalls.at(-1).payload.uri, uri);
+  }
 
   wb.dispose();
   assert.equal(longHeader.querySelector('[data-testid="agy-code-fold-btn"]'), null);
@@ -1389,6 +1412,37 @@ test('Quick Context Menu respects Shift+Right-Click & file:// exclusion, trigger
   wb.dispose();
   assert.equal(document.querySelector('[data-testid="agy-omni-viewer-drawer"]'), null);
   assert.equal(highlightsMap.has('agy-omni-link'), false);
+});
+
+test('bare Windows paths open at the requested line and column and report clipboard rejection', async () => {
+  for (const path of ['C:\\src\\a.ts', 'C:/src/a.ts']) {
+    const dom = createMockDom();
+    const { document, context, highlightsMap } = dom;
+    const response = document.createElement('p');
+    response.setAttribute('data-testid', 'agent-response');
+    response.appendChild(document.createTextNode('See ' + path + ':12:8 here.'));
+    document.body.appendChild(response);
+    const calls = [], notifications = [];
+    context.navigator.clipboard.writeText = async () => { throw new Error('permission denied'); };
+    const wb = dom.createWorkbench({
+      options: () => ({ enabled: true, quickContextMenu: true, omniViewer: true, linkTarget: 'external' }),
+      notify: info => notifications.push(info),
+      request: async (method, payload) => calls.push({ method, payload })
+    });
+    try {
+      assert.equal(highlightsMap.get('agy-omni-link').ranges.length, 1);
+      response.dispatchEvent({ type: 'click', bubbles: true, clientX: 50, clientY: 20 });
+      assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+        { method: 'file.openEditor', payload: { uri: 'file:///C:/src/a.ts', line: 12, column: 8, source: 'git' } }
+      ]);
+      response.dispatchEvent({ type: 'contextmenu', bubbles: true, clientX: 50, clientY: 20 });
+      document.querySelector('[data-testid="agy-qmenu-copy-link"]').click();
+      await flush();
+      assert.equal(notifications.at(-1).title, '复制失败');
+    } finally {
+      wb.dispose();
+    }
+  }
 });
 
 test('picked media opens without an RPC call and revokes its URL on close', async () => {

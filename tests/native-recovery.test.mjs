@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import fs, {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {startNativeIntegration,declaredNativeNames,isSwarmTarget,swarmI18nSource} from '../lib/native-host.mjs';
+import vm from 'node:vm';
+import {startNativeIntegration,declaredNativeNames,ensureLoopbackNoProxyEnv,isSwarmTarget,nativeSource,swarmI18nSource} from '../lib/native-host.mjs';
 
 test('same window reattaches after an updater changes the origin or debug endpoint',async()=>{
   const directory=mkdtempSync(join(tmpdir(),'agy-recovery-')),portFile=join(directory,'port');
@@ -266,10 +269,131 @@ test('native-host unpacks isolated RPC envelopes without id/method collision and
   }
 });
 
-test('startNativeIntegration local CDP /json/list bypasses NODE_USE_ENV_PROXY and HTTP_PROXY', async () => {
+test('NO_PROXY retains existing bypasses and adds both IPv6 spellings', () => {
+  const env = { no_proxy: 'example.test, LOCALHOST, [::1]' };
+  ensureLoopbackNoProxyEnv(env);
+  assert.equal(env.NO_PROXY, 'example.test,LOCALHOST,[::1],127.0.0.1,::1');
+  ensureLoopbackNoProxyEnv(env);
+  assert.equal(env.no_proxy, env.NO_PROXY);
+  assert.equal(env.no_proxy.split(',').length, 5);
+});
+
+test('native boot gives up after 150 retries and exposes missing bindings for another attempt', () => {
+  const origin = 'https://127.0.0.1:5000';
+  const callbacks = [], errors = [];
+  const window = {};
+  window.top = window;
+  const context = vm.createContext({
+    window, location: { origin }, document: { head: {}, body: {}, getElementById: () => null },
+    setTimeout(fn, ms) { assert.equal(ms, 100); callbacks.push(fn); },
+    console: { error: value => errors.push(value) }
+  });
+  const script = new vm.Script(nativeSource(origin));
+  script.runInContext(context);
+  assert.equal(context.__agyNativeBootPending, true);
+  for (let i = 0; i < 150; i++) callbacks.shift()();
+  assert.equal(callbacks.length, 0);
+  assert.equal(context.__agyNativeBootPending, undefined);
+  assert.match(context.__agyCompatibilityError, /ReactDOM\.createRoot, createFileRoute, DOM #root/);
+  assert.deepEqual(errors, [context.__agyCompatibilityError]);
+  script.runInContext(context);
+  assert.equal(context.__agyNativeBootPending, true);
+  assert.equal(callbacks.length, 1);
+});
+
+test('native build hash includes helpers and bindings while ignoring window data', () => {
+  const origin = 'https://127.0.0.1:5000';
+  const hash = (...args) => nativeSource(...args).match(/__agyNativeBuildHash="([0-9a-f]+)"/)[1];
+  const initial = hash(origin);
+  const originalRead = fs.readFileSync;
+  let changedFile;
+  try {
+    fs.readFileSync = (file, ...args) => {
+      const data = originalRead(file, ...args);
+      return String(file).endsWith(changedFile) ? data + '\n// changed fixture' : data;
+    };
+    syncBuiltinESMExports();
+    for (changedFile of ['native-bindings.js', 'zh-tw.mjs', 'prism-workbench.js']) {
+      assert.notEqual(hash(origin), initial, changedFile);
+    }
+  } finally {
+    fs.readFileSync = originalRead;
+    syncBuiltinESMExports();
+  }
+  assert.equal(hash('https://localhost:6000', ['NewNativeName'], { priorityState: { open: true } }), initial);
+});
+
+test('mounts a healthy window while another initializes, closes failed sockets, and retains partial diagnostics', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-cdp-windows-'));
+  const portFile = join(dir, 'port');
+  writeFileSync(portFile, '12345\n');
+  const originalFetch = globalThis.fetch;
+  let targets = ['slow', 'fast'].map(id => ({
+    id, type: 'page', title: 'Antigravity', url: 'https://127.0.0.1:5000/c/a',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:12345/devtools/page/' + id
+  }));
+  globalThis.fetch = async () => ({ json: async () => targets });
+  const version = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+  const slow = Promise.withResolvers();
+  const fast = Promise.withResolvers();
+  let fastMounted = false, closed = 0, stop, timeout;
+  try {
+    stop = startNativeIntegration({
+      portFile, onStatus() {}, discover: async () => [], wsl: false,
+      connect: async endpoint => ({
+        onEvent() {},
+        socket: { addEventListener() {}, close() { if (endpoint.endsWith('/slow')) closed++; } },
+        async send(method, params) {
+          if (endpoint.endsWith('/slow')) {
+            assert.equal(method, 'Page.getFrameTree');
+            await slow.promise;
+            throw new Error('Page.getFrameTree failed');
+          }
+          if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'frame' } } };
+          if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'new-document' };
+          if (params?.expression?.startsWith('if(location.origin')) {
+            fastMounted = true;
+            fast.resolve();
+          }
+          return { result: { value: { version, healthy: true, mounted: 1 } } };
+        }
+      })
+    });
+    await Promise.race([fast.promise, new Promise(resolve => { timeout = setTimeout(resolve, 1000); })]);
+    assert.ok(fastMounted, 'fast window must finish while the first window is blocked');
+    slow.resolve();
+    await stop.ready;
+    assert.equal(closed, 1);
+    const status = await stop.health();
+    assert.equal(status.healthy, true);
+    assert.equal(status.portReachable, true);
+    assert.equal(status.matchedTargets, 2);
+    assert.equal(status.mountedCount, 1);
+    assert.equal(status.failedCount, 1);
+    assert.equal(status.firstError, 'Page.getFrameTree failed');
+
+    targets = [];
+    await stop.check();
+    const waiting = await stop.health();
+    assert.equal(waiting.portReachable, true);
+    assert.equal(waiting.matchedTargets, 0);
+    assert.equal(waiting.failedCount, 0);
+    assert.equal(waiting.firstError, '');
+  } finally {
+    clearTimeout(timeout);
+    slow.resolve();
+    await stop?.ready;
+    await stop?.();
+    globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CDP discovery and real WebSocket upgrades bypass NODE_USE_ENV_PROXY and HTTP_PROXY', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-cdp-proxy-'));
   const portFile = join(dir, 'DevToolsActivePort');
-  let cdpHits = 0, proxyHits = 0;
+  let cdpHits = 0, upgradeHits = 0, trapProxyHits = 0;
+  const upgradedSockets = new Set();
   const cdpServer = createServer((req, res) => {
     if (req.url === '/json/list') {
       cdpHits++;
@@ -280,17 +404,27 @@ test('startNativeIntegration local CDP /json/list bypasses NODE_USE_ENV_PROXY an
     res.writeHead(404);
     res.end();
   });
-  const proxyServer = createServer((req, res) => {
-    proxyHits++;
-    res.writeHead(502);
-    res.end('proxy trap');
+  cdpServer.on('upgrade', (req, socket) => {
+    upgradeHits++;
+    assert.equal(req.url, '/devtools/page/test');
+    const accept = createHash('sha1')
+      .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    upgradedSockets.add(socket);
+    socket.once('close', () => upgradedSockets.delete(socket));
+    socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+    socket.once('data', () => socket.end(Buffer.from([0x88, 0])));
+  });
+  const proxyServer = createServer();
+  proxyServer.on('connection', socket => {
+    trapProxyHits++;
+    socket.destroy();
   });
   try {
     await new Promise(r => cdpServer.listen(0, '127.0.0.1', r));
     await new Promise(r => proxyServer.listen(0, '127.0.0.1', r));
     writeFileSync(portFile, `${cdpServer.address().port}\n/devtools/browser/test\n`, 'utf8');
     const modUrl = pathToFileURL(resolve('lib/native-host.mjs')).href;
-    const script = `import { startNativeIntegration } from ${JSON.stringify(modUrl)};
+    const script = `import { connectCdp, startNativeIntegration } from ${JSON.stringify(modUrl)};
       let ready = false;
       const stop = startNativeIntegration({
         portFile: ${JSON.stringify(portFile)},
@@ -300,25 +434,31 @@ test('startNativeIntegration local CDP /json/list bypasses NODE_USE_ENV_PROXY an
       });
       await stop.ready;
       await stop();
-      if (!ready) throw new Error('debug port not reached');`;
+      if (!ready) throw new Error('debug port not reached');
+      process.env.NO_PROXY = process.env.no_proxy = '';
+      const cdp = await connectCdp('ws://127.0.0.1:${cdpServer.address().port}/devtools/page/test');
+      cdp.socket.close();
+      await new Promise(resolve => cdp.socket.addEventListener('close', resolve, { once: true }));`;
     await new Promise((resolveDone, reject) => {
       const env = {
         ...process.env,
         NODE_USE_ENV_PROXY: '1',
         HTTP_PROXY: `http://127.0.0.1:${proxyServer.address().port}`,
-        http_proxy: `http://127.0.0.1:${proxyServer.address().port}`
+        http_proxy: `http://127.0.0.1:${proxyServer.address().port}`,
+        NO_PROXY: '',
+        no_proxy: ''
       };
-      delete env.NO_PROXY;
-      delete env.no_proxy;
       const child = spawn(process.execPath, ['--input-type=module', '-e', script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stderr = '';
       child.stderr.on('data', c => { stderr += c; });
       child.once('error', reject);
       child.once('exit', code => code === 0 ? resolveDone() : reject(new Error(stderr || `exit ${code}`)));
     });
-    assert.equal(proxyHits, 0, 'local CDP discovery must never traverse HTTP_PROXY');
+    assert.equal(trapProxyHits, 0, 'local CDP discovery and upgrade must never traverse HTTP_PROXY');
     assert.equal(cdpHits, 1);
+    assert.equal(upgradeHits, 1);
   } finally {
+    for (const socket of upgradedSockets) socket.destroy();
     await new Promise(r => cdpServer.close(r));
     await new Promise(r => proxyServer.close(r));
     rmSync(dir, { recursive: true, force: true });
