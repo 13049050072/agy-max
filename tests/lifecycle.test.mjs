@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,readdirSync,rmSync,symlinkSync,utimesSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,readdirSync,rmSync,symlinkSync,utimesSync,lstatSync} from 'node:fs';
 import {createServer} from 'node:http';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {collectPackage,writePackage,encodePackage,decodePackage,validatePackage,sha256,releaseName} from '../lib/package.mjs';
-import {installationPaths,installPlugin,uninstallPlugin,atomicJson,assertOwnedPath,acquireLockFile,releaseLockFile} from '../lib/lifecycle.mjs';
+import {installationPaths,installPlugin,uninstallPlugin,atomicJson,assertOwnedPath,acquireLockFile,releaseLockFile,removePathSafe,parseLifecycleArgs,planLifecycle} from '../lib/lifecycle.mjs';
 import {runUpdateJob,updateStatus,startUpdate,mergeLoopbackNoProxy} from '../lib/update-manager.mjs';
 import {serveRuntime,stopRuntimes,waitForRuntime,runtimeRecords} from '../lib/runtime-control.mjs';
 
@@ -54,10 +54,84 @@ test('keep-settings uninstall retains preferences and removes the installed plug
   const s=sandbox();try{await installPlugin({bundle:original,home:s.home,stop});writeFileSync(join(s.paths.data,'settings.json'),'{}');await uninstallPlugin({home:s.home,purge:false,stop});assert.equal(existsSync(s.paths.installed),false);assert.equal(readFileSync(join(s.paths.data,'settings.json'),'utf8'),'{}');}finally{s.clean();}
 });
 
-test('legacy installer backups are purged only when registered and identified as this plugin',async()=>{
+test('purge retains external legacy installer backups',async()=>{
   const s=sandbox();try{
     const source=join(s.root,'source');writePackage(original,source);const owned=join(source,'.backups','installed-2026-11-15T00-00-00-000Z'),foreign=join(source,'.backups','installed-2026-11-14T00-00-00-000Z');mkdirSync(owned,{recursive:true});mkdirSync(foreign,{recursive:true});atomicJson(join(owned,'plugin.json'),{name:'agy-max'});atomicJson(join(foreign,'plugin.json'),{name:'other'});
-    await installPlugin({source,home:s.home,stop});await uninstallPlugin({home:s.home,stop});assert.equal(existsSync(owned),false);assert.equal(existsSync(foreign),true);assert.equal(existsSync(join(source,'package.json')),true);
+    await installPlugin({source,home:s.home,stop});await uninstallPlugin({home:s.home,stop});assert.equal(existsSync(owned),true);assert.equal(existsSync(foreign),true);assert.equal(existsSync(join(source,'package.json')),true);
+  }finally{s.clean();}
+});
+
+test('operations back up original BOM config bytes and keep unrelated hooks and archived conversations',async()=>{
+  const s=sandbox();try{
+    const originalConfig=Buffer.from('\uFEFF{ "plugins": {"other":{"enabled":true}} }\r\n');
+    const hooks=join(s.paths.root,'config','hooks.json');
+    const originalHooks=Buffer.from('\uFEFF{ "other/hook": {"enabled":true} }\r\n');
+    writeFileSync(s.paths.config,originalConfig);writeFileSync(hooks,originalHooks);
+    const installed=await installPlugin({bundle:original,home:s.home,stop,skipAgyFast:true});
+    assert.deepEqual(readFileSync(join(installed.configBackupDir,'config.json')),originalConfig);
+    assert.equal(existsSync(join(s.paths.root,'config','plugins','agy-fast')),false);
+    const manifest=JSON.parse(readFileSync(join(installed.configBackupDir,'manifest.json')));
+    assert.deepEqual(manifest.files,[{path:s.paths.config,size:originalConfig.length,sha256:sha256(originalConfig)}]);
+    const archived=join(s.paths.data,'archived-conversations');mkdirSync(archived,{recursive:true});writeFileSync(join(archived,'chat.db'),'archived');
+    const beforeUninstall=readFileSync(s.paths.config);
+    const removed=await uninstallPlugin({home:s.home,stop});
+    assert.notEqual(removed.configBackupDir,installed.configBackupDir);
+    assert.deepEqual(readFileSync(join(removed.configBackupDir,'config.json')),beforeUninstall);
+    assert.deepEqual(readFileSync(hooks),originalHooks);
+    assert.ok(removed.retained.includes(archived));
+    assert.equal(readFileSync(join(archived,'chat.db'),'utf8'),'archived');
+    assert.deepEqual(readFileSync(join(installed.configBackupDir,'config.json')),originalConfig);
+  }finally{s.clean();}
+});
+
+test('strict CLI parsing and dry-run leave the home and existing configuration untouched',()=>{
+  const s=sandbox();try{
+    for(const args of [['--home'],['--home','--json'],['--unknown'],['--home='],['--home','a','--home','b'],['unexpected']]){
+      assert.throws(()=>parseLifecycleArgs(args));
+      assert.throws(()=>parseLifecycleArgs(args,{uninstall:true}));
+    }
+    const home=join(s.root,'Audit Folder'),plan=planLifecycle({home,source:resolve('.'),skipAgyFast:true});
+    assert.equal(plan.home,home);assert.equal(plan.agyFast.action,'skip');assert.deepEqual(plan.config.keys,['plugins.agy-max']);
+    assert.equal(plan.shortcuts.action,'configure-debug-port');assert.equal(existsSync(home),false);
+    const before=readFileSync(s.paths.config);
+    const uninstall=planLifecycle({home:s.home,uninstall:true,purge:false});
+    assert.equal(uninstall.purge,false);assert.deepEqual(uninstall.config.keys,[]);assert.deepEqual(readFileSync(s.paths.config),before);
+    assert.equal(existsSync(s.paths.data),false);
+  }finally{s.clean();}
+});
+
+test('uninstall backs up owned hook keys and restores registration when stopping fails',async()=>{
+  const s=sandbox();try{
+    await installPlugin({bundle:original,home:s.home,stop,skipAgyFast:true});
+    const hooks=join(s.paths.root,'config','hooks.json');
+    const originalHooks=Buffer.from('\uFEFF{"agy-max-telemetry":{},"agy-max/legacy":{},"other/hook":{}}\r\n');
+    writeFileSync(hooks,originalHooks);
+    const mLock=join(s.paths.data,'..','.agy-max.lock');
+    await assert.rejects(()=>uninstallPlugin({home:s.home,stop:async()=>{
+      assert.equal(JSON.parse(readFileSync(mLock)).pid,process.pid);
+      await assert.rejects(()=>installPlugin({bundle:original,home:s.home,stop}),/已有安装/);
+      throw Error('stop failed');
+    }}),/stop failed/);
+    assert.equal(existsSync(mLock),false);
+    assert.equal(JSON.parse(readFileSync(s.paths.config)).plugins['agy-max'].enabled,true);
+    assert.deepEqual(readFileSync(hooks),originalHooks);
+    const removed=await uninstallPlugin({home:s.home,stop});
+    assert.deepEqual(readFileSync(join(removed.configBackupDir,'hooks.json')),originalHooks);
+    const files=JSON.parse(readFileSync(join(removed.configBackupDir,'manifest.json'))).files;
+    assert.ok(files.some(file=>file.path===hooks&&file.size===originalHooks.length&&file.sha256===sha256(originalHooks)));
+    assert.deepEqual(JSON.parse(readFileSync(hooks)),{'other/hook':{}});
+    assert.equal(existsSync(mLock),false);
+  }finally{s.clean();}
+});
+
+test('owned paths accept dot-prefixed names and installation refuses linked backup directories',async()=>{
+  const s=sandbox();try{
+    assert.equal(assertOwnedPath(s.paths.home,join(s.paths.home,'..notes')),join(s.paths.home,'..notes'));
+    const external=join(s.root,'external');mkdirSync(external);
+    const backup=join(s.paths.data,'backups');mkdirSync(s.paths.data,{recursive:true});
+    symlinkSync(external,backup,process.platform==='win32'?'junction':'dir');
+    await assert.rejects(()=>installPlugin({bundle:original,home:s.home,stop}),/符号链接/);
+    assert.deepEqual(readdirSync(external),[]);
   }finally{s.clean();}
 });
 
@@ -205,12 +279,14 @@ test('dangling symlinks cannot bypass assertOwnedPath or assertTree during insta
     assert.throws(()=>assertOwnedPath(s.paths.home,join(s.paths.installed,'nested','file.txt')),/符号链接/);
     await assert.rejects(()=>installPlugin({bundle:original,home:s.home,stop}),/符号链接/);
     assert.equal(existsSync(externalMissing),false);
-    rmSync(s.paths.installed,{force:true});
+    removePathSafe(s.paths.installed);
+    assert.equal(lstatSync(s.paths.installed,{throwIfNoEntry:false}),undefined);
 
     await installPlugin({bundle:original,home:s.home,stop});
     symlinkSync(externalMissing,join(s.paths.installed,'dangling-entry'),linkType);
     await assert.rejects(()=>uninstallPlugin({home:s.home,stop}),/符号链接/);
     assert.equal(existsSync(externalMissing),false);
+    removePathSafe(join(s.paths.installed,'dangling-entry'));
   }finally{s.clean();}
 });
 
@@ -241,12 +317,12 @@ test('runtime control loopback requests bypass NODE_USE_ENV_PROXY and HTTP_PROXY
   }finally{await close?.();await new Promise(r=>proxyServer.close(r));s.clean();}
 });
 
-test('mergeLoopbackNoProxy always appends localhost, 127.0.0.1, and ::1 while keeping existing entries',()=>{
+test('mergeLoopbackNoProxy keeps both IPv6 loopback forms and existing entries',()=>{
   const empty=mergeLoopbackNoProxy({});
-  assert.equal(empty.NO_PROXY,'localhost,127.0.0.1,::1');
-  assert.equal(empty.no_proxy,'localhost,127.0.0.1,::1');
+  assert.equal(empty.NO_PROXY,'localhost,127.0.0.1,::1,[::1]');
+  assert.equal(empty.no_proxy,'localhost,127.0.0.1,::1,[::1]');
   const merged=mergeLoopbackNoProxy({NO_PROXY:'internal.corp, LOCALHOST',No_Proxy:'.example.com,127.0.0.1'});
-  assert.equal(merged.NO_PROXY,'internal.corp,LOCALHOST,.example.com,127.0.0.1,::1');
+  assert.equal(merged.NO_PROXY,'internal.corp,LOCALHOST,.example.com,127.0.0.1,::1,[::1]');
   assert.equal(merged.no_proxy,merged.NO_PROXY);
   assert.equal(Object.hasOwn(merged,'No_Proxy'),false);
 });
@@ -255,7 +331,7 @@ test('maintenance.lock and update.lock recover from corrupt files and invalid PI
   const s=sandbox();
   try{
     mkdirSync(s.paths.data,{recursive:true});
-    const mLock=join(s.paths.data,'maintenance.lock');
+    const mLock=join(s.paths.data,'..','.agy-max.lock');
     const uLock=join(s.paths.data,'update.lock');
     const past=new Date(Date.now()-5000);
 
@@ -287,4 +363,25 @@ test('maintenance.lock and update.lock recover from corrupt files and invalid PI
     assert.equal(started.status,'preparing');
     assert.equal(JSON.parse(readFileSync(uLock,'utf8')).pid,process.pid);
   }finally{s.clean();}
+});
+
+test('stopRuntimes cleans stale ECONNREFUSED records with recycled live PIDs and waitForRuntime preserves rollback on compatibilityError',async()=>{
+  const s=sandbox();let closeBroken,closeHeadless;
+  try{
+    const directory=join(s.paths.data,'runtime');
+    mkdirSync(directory,{recursive:true});
+    const stalePort=await new Promise((res,rej)=>{const srv=createServer();srv.listen(0,'127.0.0.1',()=>{const p=srv.address().port;srv.close(()=>res(p));});srv.once('error',rej);});
+    const staleFile=join(directory,`${process.pid}-deadbeef-dead-beef-dead-beefdeadbeef.json`);
+    writeFileSync(staleFile,JSON.stringify({id:'agy-max',version:older.version,port:stalePort,token:'a'.repeat(48)}));
+    await stopRuntimes(directory,{exitTimeoutMs:400});
+    assert.equal(existsSync(staleFile),false);
+
+    closeBroken=await serveRuntime({directory,version:newer.version,stop:async()=>{},health:async()=>({healthy:false,connected:true,compatibilityError:'Missing host bindings: createFileRoute'}),exit:()=>{}});
+    await assert.rejects(()=>waitForRuntime(directory,newer.version,{timeout:450}),/未能正常启动/);
+    await closeBroken();closeBroken=null;
+
+    closeHeadless=await serveRuntime({directory,version:newer.version,stop:async()=>{},health:async()=>({healthy:false,connected:false,portReachable:false,matchedTargets:0,compatibilityError:''}),exit:()=>{}});
+    const headlessStatus=await waitForRuntime(directory,newer.version,{timeout:1000});
+    assert.equal(headlessStatus.sidecarReady,true);
+  }finally{await closeBroken?.();await closeHeadless?.();s.clean();}
 });

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -15,10 +16,13 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
+import { readDatabase } from '../lib/database.mjs';
+import { createWorkspaceExplorer } from '../lib/workspace-explorer.mjs';
 import { createOmniGateway, resolveSafeDiffPath, resolveSafePreviewPath } from '../lib/omni-gateway.mjs';
 
 function makeTempDir(prefix = 'agy-omni-test-') {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
 function rawHttpRequest(urlStr, { method = 'GET', headers = {} } = {}) {
@@ -654,4 +658,87 @@ test('omni-gateway source and test contain no middle-dot character (U+00B7)', ()
   const tst = readFileSync(new URL('./omni-gateway.test.mjs', import.meta.url), 'utf8');
   assert.equal(src.includes('\u00b7'), false);
   assert.equal(tst.includes('\u00b7'), false);
+});
+
+test('workspace explorer requires approval, supports host candidates and Windows path searches', async () => {
+  const dir = makeTempDir();
+  try {
+    const project = join(dir, '\u9879\u76ee');
+    const outside = join(dir, 'outside');
+    const host = join(dir, 'host-workspace');
+    const notes = join(project, '..notes');
+    mkdirSync(notes, { recursive: true });
+    mkdirSync(outside);
+    mkdirSync(host);
+    const textPath = join(notes, '\u8bf4\u660e.md');
+    writeFileSync(textPath, 'notes');
+    const rootUri = pathToFileURL(project).href;
+    const fileUri = pathToFileURL(textPath).href;
+    const options = {
+      appDir: null, dataDir: join(dir, 'data'), homeDir: dir, platform: 'win32',
+      runCommand(cmd, args) {
+        assert.equal(cmd, 'powershell.exe');
+        assert.match(args.at(-1), /^\[Console\]::OutputEncoding = \[Text\.UTF8Encoding\]::new\(\$false\);/);
+        return { ok: true, stdout: project + '\r\n' };
+      }
+    };
+    const explorer = createWorkspaceExplorer(options);
+    for (const act of [
+      () => explorer.listDir({ rootUri }),
+      () => explorer.searchFiles({ rootUri, query: 'notes' }),
+      () => explorer.readFilePreview({ rootUri, fileUri }),
+      () => explorer.writeTextFile({ rootUri, fileUri, content: 'changed', overwrite: true })
+    ]) assert.throws(act, /\u672a\u6388\u6743/);
+    const [hostWorkspace] = explorer.recentWorkspaces({ clientWorkspaces: [host] });
+    assert.equal(explorer.listDir({ rootUri: hostWorkspace.uri }).entries.length, 0);
+    assert.throws(() => explorer.listDir({ rootUri: outside }), /\u672a\u6388\u6743/);
+    assert.equal((await explorer.pickFolder()).uri, rootUri);
+    assert.equal(explorer.listDir({ rootUri, relPath: '..notes' }).entries.length, 1);
+    assert.equal(explorer.searchFiles({ rootUri, query: '..notes\\\u8bf4\u660e' }).entries[0].uri, fileUri);
+    assert.equal(createWorkspaceExplorer(options).readFilePreview({ rootUri, fileUri }).content, 'notes');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inlineDiff accepts files underneath a directory named ..notes', async () => {
+  const dir = makeTempDir();
+  try {
+    const notes = join(dir, '..notes');
+    mkdirSync(notes);
+    writeFileSync(join(notes, 'file.txt'), 'note content\n');
+    const gateway = createOmniGateway(dir, {
+      execGit(_cmd, args, _opts, done) {
+        if (args.includes('rev-parse')) done(null, dir + '\n');
+        else done(null, '..notes/file.txt\n');
+      }
+    });
+    const diff = await gateway.inlineDiff({ workspaceUri: pathToFileURL(dir).href, path: '..notes/file.txt' });
+    assert.equal(diff.untracked, true);
+    await assert.rejects(() => gateway.inlineDiff({ workspaceUri: dir, path: '../file.txt' }), /Git/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readDatabase reports a locked SQLite file and can read it after release', () => {
+  const dir = makeTempDir();
+  let writer;
+  try {
+    const conversations = join(dir, 'conversations');
+    mkdirSync(conversations);
+    writer = new DatabaseSync(join(conversations, 'locked.db'));
+    writer.exec('CREATE TABLE gen_metadata (idx, data); CREATE TABLE steps (idx, metadata); BEGIN EXCLUSIVE;');
+    const reasons = [];
+    const onUnavailable = reason => reasons.push(reason);
+    assert.equal(readDatabase(dir, 'locked', { onUnavailable }), null);
+    assert.deepEqual(reasons, ['locked']);
+    writer.exec('ROLLBACK');
+    assert.deepEqual(readDatabase(dir, 'locked', { onUnavailable }).generations, []);
+    assert.equal(readDatabase(dir, 'missing', { onUnavailable }), null);
+    assert.deepEqual(reasons, ['locked', 'missing']);
+  } finally {
+    writer?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -464,3 +464,81 @@ test('aux-file-tree edits text files inline, keeps CRLF, and asks before overwri
   assert.ok(findByTestId(tree, 'agy-ftree-editor'));
   assert.equal(findByTestId(tree, 'agy-ftree-preview-save').props.disabled, true);
 });
+
+test('aux-file-tree reuses Windows drive cache keys, renders malformed escapes, and searches Windows paths', async () => {
+  const requests = [];
+  const h = createAuxTreeHarness({
+    workspaceUri: 'file:///C:/broken%name',
+    async requestHandler(method, payload) {
+      requests.push({ method, payload });
+      return { ok: true, entries: [] };
+    }
+  });
+  h.auxTree.sync({ enabled: true });
+  let tree = await h.render();
+  assert.match(JSON.stringify(tree), /broken%name/);
+  h.setConversation('conv-1', 'file:///c:/broken%name');
+  tree = await h.render();
+  assert.equal(requests.filter(({ method }) => method === 'workspace.listDir').length, 1);
+  findByTestId(tree, 'agy-ftree-filter').props.onChange({ target: { value: 'src\\lib\\target.ts' } });
+  await h.render();
+  await new Promise(resolve => setTimeout(resolve, 130));
+  assert.deepEqual(JSON.parse(JSON.stringify(requests.find(({ method }) => method === 'workspace.searchFiles').payload)), {
+    rootUri: 'file:///c:/broken%name', query: 'src/lib/target.ts'
+  });
+});
+
+test('aux-file-tree saves LF-dominant mixed text without converting LF lines to CRLF', async () => {
+  const workspaceUri = 'file:///C:/repo';
+  const writes = [];
+  const h = createAuxTreeHarness({
+    workspaceUri,
+    async requestHandler(method, payload) {
+      if (method === 'workspace.listDir') {
+        return { ok: true, entries: [{ name: 'mixed.txt', relPath: 'mixed.txt', uri: workspaceUri + '/mixed.txt' }] };
+      }
+      if (method === 'workspace.readFile') {
+        return { ok: true, kind: 'text', name: 'mixed.txt', uri: payload.fileUri, editable: true, content: 'one\r\ntwo\nthree\n' };
+      }
+      if (method === 'workspace.writeFile') writes.push(payload.content);
+      return { ok: true };
+    }
+  });
+  h.auxTree.sync({ enabled: true });
+  let tree = await h.render();
+  findByTestId(tree, 'agy-ftree-file-row').props.onClick();
+  tree = await h.render();
+  findByTestId(tree, 'agy-ftree-preview-edit').props.onClick();
+  tree = await h.render();
+  findByTestId(tree, 'agy-ftree-editor').props.onChange({ target: { value: 'one\ntwo\nupdated\n' } });
+  tree = await h.render();
+  findByTestId(tree, 'agy-ftree-preview-save').props.onClick();
+  await h.render();
+  assert.deepEqual(writes, ['one\ntwo\nupdated\n']);
+});
+
+test('aux-file-tree registers unapproved host workspace via workspace.recent and retries listDir seamlessly', async () => {
+  const workspaceUri = 'file:///Users/dev/older-project';
+  let authorized = false;
+  const calls = [];
+  const h = createAuxTreeHarness({
+    workspaceUri,
+    async requestHandler(method, payload) {
+      calls.push(method);
+      if (method === 'workspace.recent') {
+        assert.equal(payload.clientWorkspaces[0].uri, workspaceUri);
+        authorized = true;
+        return { ok: true, workspaces: [{ uri: workspaceUri, name: 'older-project' }] };
+      }
+      if (method === 'workspace.listDir') {
+        if (!authorized) throw new Error('工作区尚未授权，请先挂载该文件夹');
+        return { ok: true, entries: [{ name: 'index.mjs', relPath: 'index.mjs', uri: `${workspaceUri}/index.mjs` }] };
+      }
+      return { ok: true };
+    }
+  });
+  h.auxTree.sync({ enabled: true });
+  const tree = await h.render();
+  assert.deepEqual(calls, ['workspace.listDir', 'workspace.recent', 'workspace.listDir']);
+  assert.ok(findByTestId(tree, 'agy-ftree-file-row'));
+});

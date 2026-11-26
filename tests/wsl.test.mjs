@@ -4,13 +4,15 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { createConnection, createServer } from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   appendWslEnv,
   createWslCdpBridge,
   isWslEnvironment,
+  resolveWindowsEnvVar,
+  resolveWslWindowsNodeRuntime,
   rewriteCdpWebSocketUrl,
   windowsPathToWsl,
   wslDistroName,
@@ -209,6 +211,35 @@ test('WSL2 hybrid credential vault pairs file active state with isolated Windows
     const wslMismatchRestore = vault.restoreToActive('acct-beta', { expectedEmail: 'alpha@example.com' });
     assert.equal(wslMismatchRestore.ok, false);
     assert.equal(wslMismatchRestore.mismatch, true);
+
+    // Verify an opaque backup requires a trusted hash to overwrite a different active credential, while rotating active opaque token can still back up to its own slot.
+    const refusedOpaque = vault.restoreToActive('acct-alpha', { expectedEmail: 'alpha@example.com' });
+    assert.match(refusedOpaque.error, /unverifiable credential/);
+    writeFileSync(tokenPath, 'oauth-token-alpha-rotated\n', 'utf8');
+    const refreshedSaved = vault.saveActiveTo('acct-alpha', { expectedEmail: 'alpha@example.com' });
+    assert.equal(refreshedSaved.ok, true);
+    writeFileSync(tokenPath, betaJson, 'utf8');
+    assert.equal(vault.restoreToActive('acct-alpha', { expectedEmail: 'alpha@example.com', expectedHash: refreshedSaved.hash }).ok, true);
+
+    unlinkSync(scopePath);
+    const withoutScope = vault.saveActiveTo('acct-no-scope');
+    assert.equal(withoutScope.ok, true);
+    writeFileSync(scopePath, 'stale scope');
+    assert.equal(vault.restoreToActive('acct-no-scope').ok, true);
+    assert.equal(existsSync(scopePath), false);
+
+    writeFileSync(tokenPath, Buffer.alloc(2560, 65));
+    const writesBefore = spawnCalls.length;
+    assert.match(vault.saveActiveTo('acct-large').error, /2560-byte/);
+    assert.equal(spawnCalls.length, writesBefore);
+
+    unlinkSync(tokenPath);
+    mkdirSync(tokenPath);
+    writeFileSync(scopePath, 'keep scope on partial failure');
+    assert.equal(vault.restoreToActive('acct-no-scope').ok, false);
+    assert.equal(readFileSync(scopePath, 'utf8'), 'keep scope on partial failure');
+    assert.deepEqual(readdirSync(configDir), ['credential-user-scope']);
+    assert.deepEqual(readdirSync(geminiDir), ['jetski-standalone-oauth-token']);
 
     // Headless Linux without secret-tool reports clear probe failure and error reason
     const headlessVault = createCredentialVault({
@@ -606,4 +637,27 @@ test('createWslCdpBridge deduplicates concurrent ensureServer calls and enforces
     child.on('close', code => resolve(code));
   });
   assert.equal(workerExit, 1);
+});
+
+test('WSL reads cmd environment output as UTF-16LE and hides Win32 subprocess windows', () => {
+  const profilePath = 'C:\\Users\\\u7528\u6237';
+  const expectedPath = '/mnt/c/Users/\u7528\u6237';
+  assert.equal(resolveWindowsEnvVar('USERPROFILE', { runSpawn(cmd, args, options) {
+    assert.equal(cmd, 'cmd.exe');
+    assert.deepEqual(args, ['/d', '/u', '/c', 'echo %USERPROFILE%']);
+    assert.equal(options.encoding, 'utf16le');
+    assert.equal(options.windowsHide, true);
+    const bytes = Buffer.from(profilePath + '\r\n', 'utf16le');
+    return { status: 0, stdout: bytes.toString(options.encoding) };
+  } }), profilePath);
+  assert.equal(resolveWslWindowsNodeRuntime({
+    exists: () => true,
+    runSpawn(cmd, args, options) {
+      assert.equal(options.windowsHide, true);
+      if (cmd === 'where.exe') return { status: 0, stdout: profilePath + '\\node.exe\r\n' };
+      assert.equal(cmd, 'wslpath');
+      assert.deepEqual(args, ['-u', profilePath + '\\node.exe']);
+      return { status: 0, stdout: expectedPath + '/node.exe\n' };
+    }
+  }).command, expectedPath + '/node.exe');
 });

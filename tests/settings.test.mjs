@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createPriorityStore } from '../lib/priority.mjs';
 import { createSettingsStore, DEFAULT_SETTINGS } from '../lib/settings.mjs';
 
 test('settings persist, merge safely, and reject unknown options without changing saved data', () => {
@@ -68,12 +69,12 @@ test('settings persist, merge safely, and reject unknown options without changin
     store.set({ multiAccount: false, accountSwitcher: true, accountViewMode: 'list', accountQuotaWindow: '5h', autoSwitchAccount: false });
     assert.equal(store.get().proxyEnabled, false);
     assert.equal(store.get().proxyUrl, '');
-    assert.equal(store.get().proxyBypass, 'localhost,127.0.0.1,::1');
+    assert.equal(store.get().proxyBypass, 'localhost,127.0.0.1,::1,[::1]');
     assert.equal(store.get().proxyForceHttp1, false);
     store.set({ proxyEnabled: true, proxyUrl: 'http://127.0.0.1:7897/', proxyBypass: '192.168.0.0/16', proxyForceHttp1: true });
     assert.equal(store.get().proxyEnabled, true);
     assert.equal(store.get().proxyUrl, 'http://127.0.0.1:7897');
-    assert.equal(store.get().proxyBypass, 'localhost,127.0.0.1,::1,192.168.0.0/16');
+    assert.equal(store.get().proxyBypass, 'localhost,127.0.0.1,::1,[::1],192.168.0.0/16');
     assert.equal(store.get().proxyForceHttp1, true);
     store.set({ proxyEnabled: false, proxyUrl: '', proxyBypass: 'localhost,127.0.0.1,::1', proxyForceHttp1: false });
     assert.equal(store.get().sidebarProjectLimit, 0);
@@ -121,4 +122,24 @@ test('settings persist, merge safely, and reject unknown options without changin
     assert.equal(readFileSync(join(directory, 'settings.json'), 'utf8'), before);
     store.set(DEFAULT_SETTINGS); assert.deepEqual(store.get(), DEFAULT_SETTINGS);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('settings and priority read UTF-8 BOM and atomically replace legacy JSON', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-windows-json-'));
+  try {
+    writeFileSync(join(dir, 'settings.json'), '\uFEFF{"language":"ja"}');
+    writeFileSync(join(dir, 'priority.json'), '\uFEFF{"scopes":{"local":{"open":true}}}');
+    const settings = createSettingsStore(dir);
+    const priority = createPriorityStore(dir);
+    assert.equal(settings.get().language, 'ja');
+    assert.equal(priority.get().open, true);
+    settings.set({ enabled: false });
+    priority.save('local', { open: false });
+    assert.equal(settings.get().language, 'ja');
+    assert.equal(settings.get().enabled, false);
+    assert.equal(priority.get().open, false);
+    assert.deepEqual(readdirSync(dir).sort(), ['priority.json', 'settings.json']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -49,8 +49,9 @@ test('normalizeProxyUrl, normalizeProxyBypass, and chromiumProxyArgs sanitize sa
     assert.equal(isValidProxyUrl(bad), false, `expected invalid: ${bad}`);
   }
 
-  assert.equal(normalizeProxyBypass('192.168.0.0/16; .internal.local, localhost'), 'localhost,127.0.0.1,::1,192.168.0.0/16,.internal.local');
+  assert.equal(normalizeProxyBypass('192.168.0.0/16; .internal.local, localhost'), 'localhost,127.0.0.1,::1,[::1],192.168.0.0/16,.internal.local');
   assert.equal(isValidProxyBypass('localhost,127.0.0.1,::1'), true);
+  assert.equal(normalizeProxyBypass('[::1],::1,[::1]'), DEFAULT_PROXY_BYPASS);
   assert.equal(isValidProxyBypass('localhost"$(whoami)'), false);
 
   const spec = proxySpecFromSettings({
@@ -168,4 +169,13 @@ test('probeProxyConnectivity verifies HTTP CONNECT, HTTP 407, SOCKS5 handshake, 
     await httpProxy.close();
     await socksProxy.close();
   }
+});
+
+test('external proxy must match the configured bypass list', () => {
+  const proxyUrl = 'http://proxy.example';
+  const settings = { proxyEnabled: true, proxyUrl, proxyBypass: '.internal.example,example.test' };
+  const matching = { HTTPS_PROXY: proxyUrl, no_proxy: 'EXAMPLE.TEST;[::1];.internal.example' };
+  assert.equal(inspectProxyRuntime(settings, matching).reason, 'active');
+  const different = { ...matching, no_proxy: '.internal.example' };
+  assert.equal(inspectProxyRuntime(settings, different).reason, 'config-changed');
 });

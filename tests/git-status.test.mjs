@@ -180,3 +180,42 @@ test('readGitStatus and readGitFileDiff enforce Git hardening flags, block fsmon
     rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('readGitStatus distinguishes Git unavailable, timeout, and a non-repository', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-git-status-reasons-'));
+  try {
+    const noGit = () => { throw Object.assign(new Error('git not found'), { code: 'ENOENT' }); };
+    const timeout = (_cmd, _args, _opts, done) => done({ killed: true, signal: 'SIGTERM' });
+    const nonRepo = (_cmd, _args, _opts, done) => done({ code: 128 }, '', 'fatal: not a git repository');
+    for (const [execGit, ok, reason] of [
+      [noGit, false, 'git-unavailable'],
+      [timeout, false, 'git-timeout'],
+      [nonRepo, true, 'not-a-repo']
+    ]) {
+      assert.deepEqual(await readGitStatus(dir, { force: true, execGit }), { ok, isRepo: false, reason });
+      await assert.rejects(() => readGitFileDiff(dir, 'readme.md', { execGit }), { code: reason });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readGitStatus retains Chinese filenames from UTF-8 porcelain and numstat', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-git-status-unicode-'));
+  try {
+    const name = '\u8d44\u6599 \u7b14\u8bb0.txt';
+    const execGit = (_cmd, args, _opts, done) => {
+      assert.ok(args.includes('core.quotepath=false'));
+      if (args.includes('rev-parse')) done(null, dir + '\n');
+      else if (args.includes('config')) done({ code: 1 });
+      else if (args.includes('status')) done(null, '1 .M N... 100644 100644 100644 aaa bbb ' + name + '\n');
+      else done(null, '3\t2\t' + name + '\n');
+    };
+    const status = await readGitStatus(dir, { force: true, execGit });
+    assert.equal(status.files[0].path, name);
+    assert.equal(status.additions, 3);
+    assert.equal(status.deletions, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

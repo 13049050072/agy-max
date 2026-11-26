@@ -87,6 +87,17 @@ test('already-loaded injection initializes without waiting and disposes cleanly'
   assert.ok(p.nodes.every(n => !n.isConnected));
 });
 
+test('new chat titlebar toggle has non-draggable styling and shares platform detection with native panels', () => {
+  for (const [platform, isMac] of [['Win32', false], ['Linux x86_64', false], ['MacIntel', true]]) {
+    const p = page(true);
+    p.context.navigator = { platform };
+    p.context.__agyPanels = env => { assert.equal(env.isMac, isMac); };
+    vm.runInContext(source, p.context);
+    assert.ok(p.nodes.some(node => /\[data-testid="agy-new-chat-aux-toggle"\]\{-webkit-app-region:no-drag;app-region:no-drag\}/.test(node.textContent)));
+    p.context.__agyPowertools.dispose();
+  }
+});
+
 test('multi-pane conversations with multiple composers stay healthy without triggering reload loops', () => {
   const p = page(true);
   p.context.location.pathname = '/c/conv-1';
@@ -1344,6 +1355,7 @@ test('refresh does not lock settingsLoaded=true if applyOptions throws before mo
 
 test('ComposerGoalBar renders floating pill with checklist progress and expands GoalInlineDeck in-place without body drawer', async () => {
   const p = page(true);
+  p.context.navigator = { platform: 'Win32' };
   p.context.location.pathname = '/c/conv-goal-ui';
   const renderedByMount = new Map();
   let stateSlots = [];
@@ -1517,6 +1529,7 @@ test('ComposerGoalBar renders floating pill with checklist progress and expands 
   const dirtyDeck = evalTree(renderedByMount.get(goalMount));
   const saveBtn = findByTestId(dirtyDeck, 'agy-goal-save-btn');
   assert.equal(saveBtn.props.disabled, false);
+  assert.deepEqual(saveBtn.children, ['保存 Ctrl+S']);
   saveBtn.props.onClick();
   await new Promise(r => setTimeout(r, 30));
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractTranscriptGoal, resolveConversationGoal, findGoalInterruption, syncConversationGoal, createGoalsStore } from '../lib/goals.mjs';
@@ -203,6 +203,20 @@ test('findGoalInterruption supports instant 0ms abort and persisted executor_met
     assert.ok(findGoalInterruption({ status: 'active', stepIndex: 4, activeAfterStepIndex: 3 }, {
       executions: [{ index: 0, terminationReason: 1, stepIndex: 5 }]
     }));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('goals preserve entries read from UTF-8 BOM JSON when saving', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-goals-bom-'));
+  try {
+    writeFileSync(join(dir, 'goals.json'), '\uFEFF{"old":{"text":"Existing goal","status":"active"}}');
+    const store = createGoalsStore(dir);
+    store.save('new', { text: 'New goal' });
+    assert.equal(store.get('old').text, 'Existing goal');
+    assert.equal(store.get('new').text, 'New goal');
+    assert.deepEqual(readdirSync(dir), ['goals.json']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

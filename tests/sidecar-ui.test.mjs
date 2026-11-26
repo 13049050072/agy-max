@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import vm from 'node:vm';
 import { startSidecarWebUi, renderAuxPaneHtml } from '../lib/sidecar-ui.mjs';
+import { startNativeIntegration } from '../lib/native-host.mjs';
 
 function allocatePort() {
   return new Promise((resolve, reject) => {
@@ -204,6 +208,124 @@ test('renderAuxPaneHtml escapes version in HTML and inline script JSON safely', 
   assert.equal(inlineScript.includes('</script>'), false);
   assert.ok(inlineScript.includes('\\u003c/script\\u003e'));
   assert.doesNotThrow(() => new Function(inlineScript));
+});
+
+test('Sidecar API includes discovery diagnostics with the legacy inspector status callback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-sidecar-diagnostics-'));
+  const portFile = join(dir, 'port');
+  writeFileSync(portFile, '12345\n');
+  const fetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ json: async () => [] });
+  let stop, close;
+  try {
+    stop = startNativeIntegration({ portFile, onStatus() {}, wsl: false });
+    const port = await allocatePort();
+    close = await startSidecarWebUi({
+      port, token: 'test-token',
+      getStatus: async () => {
+        const { healthy, connected } = await stop.health();
+        return { healthy, connected, enabled: true };
+      }
+    });
+    const response = await rawHttpRequest({ port, path: '/api/status?token=test-token' });
+    assert.equal(response.status, 200);
+    const { portReachable, matchedTargets, mountedCount, failedCount, firstError } = JSON.parse(response.body);
+    assert.deepEqual({ portReachable, matchedTargets, mountedCount, failedCount, firstError }, {
+      portReachable: true, matchedTargets: 0, mountedCount: 0, failedCount: 0, firstError: ''
+    });
+  } finally {
+    await close?.();
+    await stop?.();
+    globalThis.fetch = fetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Sidecar serializes slow status polls and reports waiting, partial mounts, and clipboard results', async () => {
+  const html = renderAuxPaneHtml({ version: '1.1.0', language: 'en' });
+  const script = html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
+  const elements = new Map(), timeouts = new Map();
+  let request, selected = false, writtenText, rejectClipboard = true;
+  let nextTimer = 0, statusRequests = 0;
+  const getElement = id => {
+    if (!elements.has(id)) {
+      elements.set(id, {
+        dataset: {}, hidden: true, listeners: {},
+        addEventListener(type, fn) { this.listeners[type] = fn; },
+        click() { return this.listeners.click?.(); },
+        setAttribute() {}, focus() {}, select() { selected = true; }
+      });
+    }
+    return elements.get(id);
+  };
+  vm.runInNewContext(script, {
+    document: { documentElement: {}, getElementById: getElement },
+    location: { search: '' },
+    URLSearchParams,
+    navigator: { clipboard: { async writeText(value) {
+      if (rejectClipboard) throw new Error('clipboard denied');
+      writtenText = value;
+    } } },
+    setTimeout(fn, ms) {
+      const id = ++nextTimer;
+      timeouts.set(id, { fn, ms });
+      return id;
+    },
+    clearTimeout: id => timeouts.delete(id),
+    setInterval() { assert.fail('status must use a one-shot timer'); },
+    fetch(url) {
+      if (url === '/api/relaunch') return Promise.resolve({ ok: false, json: async () => ({ scheduled: false }) });
+      assert.equal(url, '/api/status');
+      statusRequests++;
+      request = Promise.withResolvers();
+      return request.promise;
+    }
+  });
+  const settleStatus = async data => {
+    request.resolve({ ok: true, json: async () => ({ enabled: true, language: 'en', ...data }) });
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  const nextStatus = () => {
+    const polls = [...timeouts].filter(([, timer]) => timer.ms === 3000);
+    assert.equal(polls.length, 1);
+    const [id, { fn }] = polls[0];
+    timeouts.delete(id);
+    return fn();
+  };
+
+  assert.equal(statusRequests, 1);
+  assert.equal(timeouts.size, 0, 'wait for status to settle before scheduling the next request');
+  await settleStatus({ portReachable: false, manualCommand: 'antigravity --remote-debugging-port=12345' });
+  assert.match(getElement('title').textContent, /Restart/);
+  assert.equal(getElement('relaunch-btn').hidden, false);
+  await getElement('relaunch-btn').click();
+  await getElement('copy-cmd-btn').click();
+  assert.match(getElement('copy-feedback').textContent, /Copy failed/);
+  assert.match(getElement('copy-fallback').value, /--remote-debugging-port/);
+  assert.equal(selected, true);
+
+  let poll = nextStatus();
+  assert.equal(statusRequests, 2);
+  assert.equal(timeouts.size, 0);
+  await settleStatus({ portReachable: true, matchedTargets: 0 });
+  await poll;
+  assert.match(getElement('title').textContent, /Waiting for the main window/);
+  assert.equal(getElement('relaunch-btn').hidden, true);
+  assert.equal(getElement('copy-fallback').hidden, true);
+
+  poll = nextStatus();
+  await settleStatus({ healthy: true, portReachable: true, matchedTargets: 3, mountedCount: 2, failedCount: 1, firstError: 'Frame tree failed' });
+  await poll;
+  assert.match(getElement('title').textContent, /some windows/);
+  assert.match(getElement('compat-box').textContent, /2\/3\nFrame tree failed/);
+  await getElement('copy-diag-btn').click();
+  assert.match(getElement('copy-feedback').textContent, /Copy failed/);
+  assert.match(getElement('copy-fallback').value, /Frame tree failed/);
+  rejectClipboard = false;
+  await getElement('copy-diag-btn').click();
+  assert.equal(getElement('copy-feedback').textContent, 'Diagnostic copied');
+  assert.equal(getElement('copy-fallback').hidden, true);
+  assert.match(writtenText, /Frame tree failed/);
 });
 
 test('Sidecar Aux Pane inline script unlocks update controls on idle status and avoids leaking poll timer on terminal install response', async () => {

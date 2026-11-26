@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import vm from 'node:vm';
@@ -1256,4 +1256,70 @@ test('AddAccountModal shows the pending https sign-in link, copies it, and cance
   // Before sign-in starts, cancel just closes without cancelling a login.
   find(render(false), 'agy-add-account-cancel').props.onClick();
   assert.equal(cancelled, 1);
+});
+
+test('credential refresh and account removal preserve the index on vault errors', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-accounts-vault-errors-'));
+  try {
+    const key = 'gemini:antigravity';
+    const index = join(dir, 'accounts.json');
+    const vault = createFakeVault({ [key]: 'alpha-secret' });
+    const store = createAccountsStore(dir, { vault });
+    const alpha = store.syncActive({ email: 'alpha@example.com' }).activeId;
+    vault.slots.set(key, 'beta-secret');
+    store.syncActive({ email: 'beta@example.com' });
+    const originalIndex = readFileSync(index, 'utf8');
+    const failure = { status: 'error', exists: false, error: 'Credential Manager is locked' };
+    vault.inspectSaved = () => failure;
+    vault.saveActiveTo = () => ({ ok: false, error: failure.error });
+    vault.removeSaved = () => ({ ok: false, error: failure.error });
+    assert.equal(store.refreshCredentials().valid, 2);
+    assert.throws(() => store.removeAccount(alpha), /is locked/);
+    assert.equal(readFileSync(index, 'utf8'), originalIndex);
+    vault.removeSaved = () => ({ ok: false, status: 'missing' });
+    assert.equal(store.removeAccount(alpha).accounts.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('switchAccount records hashes before restore and rolls back when the index cannot commit', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-accounts-switch-rollback-'));
+  try {
+    const key = 'gemini:antigravity';
+    const index = join(dir, 'accounts.json');
+    const heldIndex = join(dir, 'held-index.json');
+    const vault = createFakeVault({ [key]: 'alpha-secret' });
+    const store = createAccountsStore(dir, { vault });
+    const alpha = store.syncActive({ email: 'alpha@example.com' }).activeId;
+    vault.slots.set(key, 'beta-secret');
+    const beta = store.syncActive({ email: 'beta@example.com' }).activeId;
+    const restore = vault.restoreToActive.bind(vault);
+    const calls = [];
+    vault.restoreToActive = (id, options) => {
+      calls.push([id, options.expectedHash]);
+      if (id === alpha) {
+        const state = JSON.parse(readFileSync(index, 'utf8'));
+        assert.equal(state.activeId, beta);
+        assert.deepEqual(state.pendingSwitch, {
+          targetId: alpha, targetEmail: 'alpha@example.com', atMs: state.pendingSwitch.atMs,
+          targetHash: vault.inspectSaved(alpha).hash, previousHash: vault.inspectSaved(beta).hash
+        });
+        renameSync(index, heldIndex);
+        mkdirSync(index);
+      } else {
+        rmdirSync(index);
+        renameSync(heldIndex, index);
+      }
+      return restore(id);
+    };
+    assert.throws(() => store.switchAccount(alpha), /rename/);
+    assert.equal(vault.slots.get(key), 'beta-secret');
+    assert.deepEqual(calls, [[alpha, vault.inspectSaved(alpha).hash], [beta, vault.inspectSaved(beta).hash]]);
+    assert.equal(store.list().activeId, beta);
+    assert.equal(JSON.parse(readFileSync(index, 'utf8')).pendingSwitch, null);
+    assert.deepEqual(readdirSync(dir), ['accounts.json']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

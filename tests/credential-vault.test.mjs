@@ -195,13 +195,13 @@ test('Windows PowerShell WIN32_SCRIPT compiles Add-Type and extracts id_token_em
   });
   const wslEnvelope = JSON.stringify({
     v: 1,
-    token: Buffer.from(JSON.stringify({ id_token_email: 'Beta@Example.com' }), 'utf8').toString('base64'),
+    token: Buffer.from('\uFEFF' + JSON.stringify({ id_token_email: 'Beta@Example.com' }), 'utf16le').toString('base64'),
     scope: null
   });
   const verifyScript = [
     addTypeBlock,
     '$cases = @($env:AGY_TEST_C1, $env:AGY_TEST_C2, $env:AGY_TEST_C3, $env:AGY_TEST_C4)',
-    '$out = foreach ($c in $cases) { [AgyWinCred]::ExtractEmail([System.Text.Encoding]::UTF8.GetBytes($c)) }',
+    '$out = foreach ($c in $cases) { [AgyWinCred]::ExtractEmail([Convert]::FromBase64String($c)) }',
     'Write-Output ($out -join "|")'
   ].join('\n');
   const res = spawnSync(
@@ -213,10 +213,10 @@ test('Windows PowerShell WIN32_SCRIPT compiles Add-Type and extracts id_token_em
       timeout: 20000,
       env: {
         ...process.env,
-        AGY_TEST_C1: directPayload,
-        AGY_TEST_C2: decoyPayload,
-        AGY_TEST_C3: wslEnvelope,
-        AGY_TEST_C4: 'opaque-non-json-token'
+        AGY_TEST_C1: Buffer.from('\uFEFF' + directPayload, 'utf16le').toString('base64'),
+        AGY_TEST_C2: Buffer.from(decoyPayload, 'utf8').toString('base64'),
+        AGY_TEST_C3: Buffer.from(wslEnvelope, 'utf16le').toString('base64'),
+        AGY_TEST_C4: Buffer.from('opaque-non-json-token').toString('base64')
       }
     }
   );
@@ -307,4 +307,33 @@ test('macOS credential vault decodes security -w hex output for non-ASCII/multil
   assert.equal(restored.hash, activeInfo.hash);
   assert.equal(restored.email, 'alice@example.com');
   assert.deepEqual(keychain.get('gemini::antigravity'), expectedBuf);
+});
+
+test('Windows inspect distinguishes missing slots from native and subprocess failures', () => {
+  const outputs = [
+    { status: 0, stdout: '{"ok":true,"exists":false,"status":"missing","hash":""}' },
+    { status: 1, stdout: '{"ok":false,"status":"error","win32Error":5,"error":"read failed: 5"}' },
+    { status: 1, stdout: '{"ok":true,"exists":false,"status":"missing"}', stderr: 'PowerShell failed' },
+    new Error('PowerShell unavailable')
+  ];
+  const vault = createCredentialVault({
+    platform: 'win32',
+    runSpawn() {
+      const result = outputs.shift();
+      if (result instanceof Error) throw result;
+      return result;
+    }
+  });
+  assert.deepEqual(vault.inspectSaved('acct-1'), { exists: false, hash: '', status: 'missing' });
+  assert.deepEqual(vault.inspectSaved('acct-1'), { exists: false, status: 'error', error: 'read failed: 5', win32Error: 5 });
+  assert.deepEqual(vault.inspectActive(), { exists: false, status: 'error', error: 'PowerShell failed' });
+  assert.deepEqual(vault.inspectActive(), { exists: false, status: 'error', error: 'PowerShell unavailable' });
+});
+
+test('credential email extraction accepts UTF-8 BOM and UTF-16LE envelopes and tokens', () => {
+  const json = JSON.stringify({ id_token_email: 'Alpha@Example.com' });
+  assert.equal(extractCredentialEmail(Buffer.from('\uFEFF' + json)), 'alpha@example.com');
+  assert.equal(extractCredentialEmail(Buffer.from(json, 'utf16le')), 'alpha@example.com');
+  const envelope = JSON.stringify({ token: Buffer.from('\uFEFF' + json, 'utf16le').toString('base64') });
+  assert.equal(extractCredentialEmail(Buffer.from(envelope, 'utf16le')), 'alpha@example.com');
 });

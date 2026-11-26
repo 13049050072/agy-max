@@ -867,6 +867,21 @@ test('conversationDirectory and workspaceUri classify running, unread, projects,
   assert.equal(dir.projects.length, 2);
 });
 
+test('recent workspaces deduplicate Windows drive letter case and retain the latest raw URI', () => {
+  const summaries = Object.fromEntries([
+    ['older', 'file:///C:/repo', 10],
+    ['latest', 'file:///c:/repo', 20],
+    ['other', 'file:///C:/other', 15]
+  ].map(([id, uri, seconds]) => [id, { workspaceFolderAbsoluteUri: uri, lastModifiedTime: { seconds } }]));
+  const store = { getState: () => ({ trajectorySummaries: { summaries } }), dispatch() {} };
+  const node = { '__reactFiber$fixture': { tag: 10, memoizedProps: { value: { store } } } };
+  const context = vm.createContext({ document: { querySelector: () => node } });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const adapter = context.__agyNativeAdapter;
+  assert.deepEqual(Array.from(adapter.recentWorkspaces(), workspace => workspace.uri), ['file:///c:/repo', 'file:///C:/other']);
+  assert.equal(adapter.workspaceUri('older'), 'file:///C:/repo');
+});
+
 test('composer text helpers read/write plain Lexical state and distinguish nested side composers', () => {
   let mainState = null;
   const mainRoot = { textContent: 'hello draft' };
