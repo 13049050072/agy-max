@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, rmSync, symlinkSync, openSync, closeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { collectPackage } from '../lib/package.mjs';
 import { installPlugin, uninstallPlugin, installationPaths, atomicJson } from '../lib/lifecycle.mjs';
-import { syncBundledAgyFast, cleanupBundledAgyFast, MANAGED_MARKER, PARKED_MARKER } from '../lib/agy-fast-bundle.mjs';
+import { syncBundledAgyFast, cleanupBundledAgyFast, removePathSafe, MANAGED_MARKER, PARKED_MARKER } from '../lib/agy-fast-bundle.mjs';
 
 function dirLinkType() {
   return process.platform === 'win32' ? 'junction' : 'dir';
@@ -261,14 +262,70 @@ test('dangling symlinks cannot bypass assertSafeOwned or assertCleanTree in agy-
     symlinkSync(externalNonExistent, fastDir, dirLinkType());
     assert.throws(() => syncBundledAgyFast({ home: s.home, enabled: true }), /符号链接/);
     assert.equal(existsSync(externalNonExistent), false);
-    rmSync(fastDir, { force: true });
+    removePathSafe(fastDir);
+    assert.equal(lstatSync(fastDir, { throwIfNoEntry: false }), undefined);
 
     // Dangling symlink inside targetDir must be rejected by assertCleanTree
     mkdirSync(fastDir, { recursive: true });
     writeFileSync(join(fastDir, 'plugin.json'), JSON.stringify({ name: 'agy-fast', version: '0.9.9' }));
     symlinkSync(externalNonExistent, join(fastDir, 'broken-link'), dirLinkType());
     assert.throws(() => syncBundledAgyFast({ home: s.home, enabled: false }), /符号链接/);
+    removePathSafe(join(fastDir, 'broken-link'));
   } finally {
     s.clean();
   }
+});
+
+test('managed replacement preserves Chinese local rules and the current plugin if staging fails', () => {
+  const s = createSandbox();
+  try {
+    const target = join(s.paths.root, 'config', 'plugins', 'agy-fast');
+    const rule = join(target, 'rules', '团队规则.local.md');
+    syncBundledAgyFast({ home: s.home });
+    writeFileSync(rule, '# 用户规则\n');
+    syncBundledAgyFast({ home: s.home });
+    assert.equal(readFileSync(rule, 'utf8'), '# 用户规则\n');
+    const broken = join(s.root, 'broken-vendor');
+    mkdirSync(broken);
+    atomicJson(join(broken, 'plugin.json'), { name: 'agy-fast', version: '8.8.8' });
+    writeFileSync(join(broken, 'rules'), 'file instead of directory');
+    assert.throws(() => syncBundledAgyFast({ home: s.home, vendorDir: broken }));
+    assert.equal(readFileSync(rule, 'utf8'), '# 用户规则\n');
+    assert.notEqual(JSON.parse(readFileSync(join(target, MANAGED_MARKER))).version, '8.8.8');
+  } finally { s.clean(); }
+});
+
+test('a second standalone directory cannot overwrite a parked user-owned copy', () => {
+  const s = createSandbox();
+  try {
+    const target = join(s.paths.root, 'config', 'plugins', 'agy-fast');
+    const parked = join(s.paths.data, 'parked-plugins', 'agy-fast');
+    mkdirSync(target, { recursive: true });
+    atomicJson(join(target, 'plugin.json'), { name: 'agy-fast', version: '1.0.0' });
+    assert.equal(syncBundledAgyFast({ home: s.home, enabled: false }).ok, true);
+    mkdirSync(target);
+    atomicJson(join(target, 'plugin.json'), { name: 'agy-fast', version: '2.0.0' });
+    assert.equal(syncBundledAgyFast({ home: s.home, enabled: false }).reason, 'parked-exists');
+    assert.equal(JSON.parse(readFileSync(join(parked, 'plugin.json'))).version, '1.0.0');
+    assert.equal(JSON.parse(readFileSync(join(target, 'plugin.json'))).version, '2.0.0');
+  } finally { s.clean(); }
+});
+
+test('vendored updater reports managed status even when a CLI update is forced', () => {
+  const s = createSandbox();
+  try {
+    const target = join(s.paths.root, 'config', 'plugins', 'agy-fast');
+    syncBundledAgyFast({ home: s.home });
+    const output = join(s.root, 'updater.json'), fd = openSync(output, 'w');
+    const cache = join(s.root, 'updater-cache');
+    try {
+      const result = spawnSync(process.execPath, [join(target, 'dist', 'updater.mjs'), '--plugin-dir', target, '--force', '--json'], {
+        env: { ...process.env, AGY_FAST_CACHE_DIR: cache }, stdio: ['ignore', fd, 'inherit']
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0);
+    } finally { closeSync(fd); }
+    assert.equal(JSON.parse(readFileSync(output)).status, 'skipped-managed');
+    assert.equal(existsSync(cache), false);
+  } finally { s.clean(); }
 });

@@ -4,14 +4,14 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "node ./scripts/telemetry-hook.mjs PreInvocation",
+        "command": "node -e \"const f=require('fs'),p=require('path'),o=require('os'),u=require('url'),e=process.env;const s=[e.PLUGIN_ROOT,e.AGY_PLUGIN_ROOT,p.join(o.homedir(),'.gemini','config','plugins','agy-max')].filter(Boolean).map(d=>p.resolve(d,'scripts','telemetry-hook.mjs')).find(s=>f.existsSync(s));if(s){process.argv.splice(1,0,s);import(u.pathToFileURL(s).href).catch(()=>process.stdout.write('{}'))}else process.stdout.write('{}')\" PreInvocation",
         "timeout": 5
       }
     ],
     "PostInvocation": [
       {
         "type": "command",
-        "command": "node ./scripts/telemetry-hook.mjs PostInvocation",
+        "command": "node -e \"const f=require('fs'),p=require('path'),o=require('os'),u=require('url'),e=process.env;const s=[e.PLUGIN_ROOT,e.AGY_PLUGIN_ROOT,p.join(o.homedir(),'.gemini','config','plugins','agy-max')].filter(Boolean).map(d=>p.resolve(d,'scripts','telemetry-hook.mjs')).find(s=>f.existsSync(s));if(s){process.argv.splice(1,0,s);import(u.pathToFileURL(s).href).catch(()=>process.stdout.write('{}'))}else process.stdout.write('{}')\" PostInvocation",
         "timeout": 5
       }
     ]

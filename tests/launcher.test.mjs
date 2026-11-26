@@ -184,7 +184,7 @@ test('executable discovery, post-update prompt guards, and relaunch scheduling p
     writeFileSync(exe, ''); writeFileSync(lsExe, '');
     assert.equal(resolveAntigravityExecutable({ platform: 'win32', env: { ANTIGRAVITY_AGENTAPI_EXE: lsExe }, home: root, execPath: '' }), exe);
     assert.equal(resolveAntigravityExecutable({ platform: 'win32', env: {}, home: root, execPath: exe }), exe);
-    assert.equal(manualLaunchCommand({ platform: 'win32', env: {}, home: root, execPath: exe }), `"${exe}" --remote-debugging-port=0`);
+    assert.equal(manualLaunchCommand({ platform: 'win32', env: {}, home: root, dataDir: join(root, 'data'), execPath: exe }), `& '${exe.replace(/'/g, "''")}' --remote-debugging-port=0`);
 
     const installDir = join(root, 'installed'), dataDir = join(root, 'data');
     mkdirSync(installDir, { recursive: true }); mkdirSync(dataDir, { recursive: true });
@@ -211,7 +211,7 @@ test('executable discovery, post-update prompt guards, and relaunch scheduling p
     assert.equal(spawned.length, 1);
     assert.equal(spawned[0].opts.env.ELECTRON_RUN_AS_NODE, undefined);
     assert.equal(spawned[0].opts.env.AGY_RELAUNCH_TARGET, exe);
-    assert.ok(spawned[0].opts.env.AGY_RELAUNCH_SCRIPT.endsWith('relaunch-antigravity.ps1'));
+    assert.match(spawned[0].opts.env.AGY_RELAUNCH_SCRIPT, /relaunch-antigravity-[a-f0-9-]+\.ps1$/i);
     assert.ok(existsSync(spawned[0].opts.env.AGY_RELAUNCH_SCRIPT));
     assert.equal(spawned[0].opts.detached, undefined);
     assert.ok(spawned[0].args.includes('-EncodedCommand'));
@@ -482,12 +482,12 @@ test('openLocalFile dispatches platform commands and blocks runnable Windows fil
 
     const posixDoc = doc;
     const posixDir = dir;
-    assert.deepEqual(calls[0], { cmd: 'explorer.exe', args: [winDoc], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[1], { cmd: 'explorer.exe', args: [`/select,${winDoc}`], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[2], { cmd: 'explorer.exe', args: [`/select,"${winCommaFile}"`], opts: { detached: true, stdio: 'ignore', windowsVerbatimArguments: true } });
+    assert.deepEqual(calls[0], { cmd: 'explorer.exe', args: [winDoc], opts: { detached: true, stdio: 'ignore', windowsHide: true } });
+    assert.deepEqual(calls[1], { cmd: 'explorer.exe', args: [`/select,${winDoc}`], opts: { detached: true, stdio: 'ignore', windowsHide: true } });
+    assert.deepEqual(calls[2], { cmd: 'explorer.exe', args: [`/select,"${winCommaFile}"`], opts: { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true } });
     assert.deepEqual(calls[3], { cmd: 'open', args: ['-R', posixDoc], opts: { detached: true, stdio: 'ignore' } });
     assert.deepEqual(calls[4], { cmd: 'xdg-open', args: [posixDir], opts: { detached: true, stdio: 'ignore' } });
-    assert.deepEqual(calls[5], { cmd: 'explorer.exe', args: [`/select,${winScript}`], opts: { detached: true, stdio: 'ignore' } });
+    assert.deepEqual(calls[5], { cmd: 'explorer.exe', args: [`/select,${winScript}`], opts: { detached: true, stdio: 'ignore', windowsHide: true } });
 
     // Windows LAN UNC paths with spaces quote cleanly for explorer /select
     await openLocalFile('file://192.168.1.10/share/a%20b.png', {
@@ -500,7 +500,7 @@ test('openLocalFile dispatches platform commands and blocks runnable Windows fil
     assert.deepEqual(calls[6], {
       cmd: 'explorer.exe',
       args: ['/select,"\\\\192.168.1.10\\share\\a b.png"'],
-      opts: { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }
+      opts: { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }
     });
 
     assert.equal(isWindowsRunnableFile(winScript), true);
@@ -590,7 +590,7 @@ test('scheduleRelaunchWithDebugPort reads saved proxy settings across platforms 
     assert.equal(winRes.proxyActive, true);
     const psBody = readFileSync(winSpawned[0].opts.env.AGY_RELAUNCH_SCRIPT, 'utf8');
     assert.ok(psBody.includes("$env:HTTPS_PROXY = 'socks5h://127.0.0.1:7897'"));
-    assert.ok(psBody.includes("$env:NO_PROXY = 'localhost,127.0.0.1,::1,192.168.0.0/16'"));
+    assert.ok(psBody.includes("$env:NO_PROXY = 'localhost,127.0.0.1,::1,[::1],192.168.0.0/16'"));
     assert.ok(psBody.includes("$env:GODEBUG = 'http2client=0'"));
     assert.ok(psBody.includes("'--proxy-server=socks5://127.0.0.1:7897'"));
     assert.ok(psBody.includes("'--proxy-bypass-list=localhost;127.0.0.1;[::1];192.168.0.0/16'"));
@@ -630,20 +630,101 @@ test('scheduleRelaunchWithDebugPort reads saved proxy settings across platforms 
     assert.ok(linSpawned[0].args[1].includes('export HTTP_PROXY="$p_url"'));
     assert.ok(linSpawned[0].args[1].includes('--proxy-server=$p_chrome'));
 
-    // Disabled proxy: Windows relaunch explicitly clears stale proxy env vars
+    // Disabled proxy after plugin-managed proxy: Windows relaunch clears stale managed proxy env vars
     writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ proxyEnabled: false, proxyUrl: 'http://127.0.0.1:7897' }));
     const offSpawned = [];
     const offRes = scheduleRelaunchWithDebugPort({
       dataDir,
       home: root,
       platform: 'win32',
-      env: { LOCALAPPDATA: join(root, 'AppData', 'Local') },
+      env: { LOCALAPPDATA: join(root, 'AppData', 'Local'), AGY_POWERTOOLS_PROXY_SPEC: 'http://127.0.0.1:7897|localhost|auto' },
       spawnProcess(cmd, args, opts) { offSpawned.push({ cmd, args, opts }); return { unref() {} }; }
     });
     assert.equal(offRes.proxyActive, false);
     const psOffBody = readFileSync(offSpawned[0].opts.env.AGY_RELAUNCH_SCRIPT, 'utf8');
     assert.ok(psOffBody.includes('Remove-Item Env:HTTP_PROXY'));
     assert.ok(!psOffBody.includes('--proxy-server='));
+
+    // Disabled plugin proxy with external inherited proxy: Windows relaunch preserves per-scheme rules & loopback bypass
+    const extSpawned = [];
+    const extRes = scheduleRelaunchWithDebugPort({
+      dataDir,
+      home: root,
+      platform: 'win32',
+      env: { LOCALAPPDATA: join(root, 'AppData', 'Local'), HTTP_PROXY: 'http://127.0.0.1:7890', HTTPS_PROXY: 'http://127.0.0.1:7890', NO_PROXY: '127.0.0.1,localhost' },
+      spawnProcess(cmd, args, opts) { extSpawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    assert.equal(extRes.proxyActive, true);
+    const psExtBody = readFileSync(extSpawned[0].opts.env.AGY_RELAUNCH_SCRIPT, 'utf8');
+    assert.ok(!psExtBody.includes('Remove-Item Env:HTTP_PROXY'));
+    assert.ok(psExtBody.includes("$env:HTTPS_PROXY = 'http://127.0.0.1:7890'"));
+    assert.ok(psExtBody.includes("$env:NO_PROXY = 'localhost,127.0.0.1,::1,[::1]'"));
+    assert.ok(psExtBody.includes('--proxy-server=http=http://127.0.0.1:7890;https=http://127.0.0.1:7890'));
+
+    // HTTP-only external proxy does not route HTTPS through HTTP proxy
+    const httpOnlySpawned = [];
+    scheduleRelaunchWithDebugPort({
+      dataDir,
+      home: root,
+      platform: 'win32',
+      env: { LOCALAPPDATA: join(root, 'AppData', 'Local'), HTTP_PROXY: 'http://127.0.0.1:8080' },
+      spawnProcess(cmd, args, opts) { httpOnlySpawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    const psHttpOnly = readFileSync(httpOnlySpawned[0].opts.env.AGY_RELAUNCH_SCRIPT, 'utf8');
+    assert.ok(psHttpOnly.includes('--proxy-server=http=http://127.0.0.1:8080'));
+    assert.ok(!psHttpOnly.includes('https='));
+
+    // Split HTTP and HTTPS external proxies generate distinct per-scheme Chromium rules
+    const splitSpawned = [];
+    scheduleRelaunchWithDebugPort({
+      dataDir,
+      home: root,
+      platform: 'win32',
+      env: { LOCALAPPDATA: join(root, 'AppData', 'Local'), HTTP_PROXY: 'http://127.0.0.1:8080', HTTPS_PROXY: 'http://127.0.0.1:8443' },
+      spawnProcess(cmd, args, opts) { splitSpawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    const psSplit = readFileSync(splitSpawned[0].opts.env.AGY_RELAUNCH_SCRIPT, 'utf8');
+    assert.ok(psSplit.includes('--proxy-server=http=http://127.0.0.1:8080;https=http://127.0.0.1:8443'));
+
+    // Custom launcher with appendDefaultArgs: false delegates cleanly without appending raw Chromium flags (Win32 & POSIX)
+    const wrapperScript = join(root, 'Start-Wrapper.ps1');
+    writeFileSync(wrapperScript, 'param([switch]$EnableCdp)\n');
+    writeFileSync(join(dataDir, 'launcher-config.json'), JSON.stringify({
+      customLauncher: { command: wrapperScript, args: ['-EnableCdp'], cwd: root, appendDefaultArgs: false }
+    }));
+    const customCmd = manualLaunchCommand({ platform: 'win32', home: root, dataDir, execPath: winExe });
+    assert.ok(customCmd.includes(wrapperScript) && customCmd.includes("'-EnableCdp'") && !customCmd.includes('--remote-debugging-port=0'));
+    const customSpawned = [];
+    scheduleRelaunchWithDebugPort({
+      dataDir,
+      home: root,
+      platform: 'win32',
+      env: { LOCALAPPDATA: join(root, 'AppData', 'Local'), HTTPS_PROXY: 'http://127.0.0.1:7890' },
+      spawnProcess(cmd, args, opts) { customSpawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    const psCustomBody = readFileSync(customSpawned[0].opts.env.AGY_RELAUNCH_SCRIPT, 'utf8');
+    assert.ok(psCustomBody.includes(wrapperScript) && psCustomBody.includes('-EnableCdp') && !psCustomBody.includes('--remote-debugging-port=0'));
+
+    const posixWrapper = join(root, 'launch.sh');
+    writeFileSync(posixWrapper, '#!/bin/sh\n');
+    writeFileSync(join(dataDir, 'launcher-config.json'), JSON.stringify({
+      customLauncher: { command: posixWrapper, args: ['--custom-cdp'], cwd: root, appendDefaultArgs: false }
+    }));
+    writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ proxyEnabled: true, proxyUrl: 'http://127.0.0.1:7897' }));
+    const posixCustomSpawned = [];
+    scheduleRelaunchWithDebugPort({
+      dataDir,
+      home: root,
+      platform: 'linux',
+      env: { APPIMAGE: linExe },
+      spawnProcess(cmd, args, opts) { posixCustomSpawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    assert.ok(posixCustomSpawned[0].args[1].includes('--custom-cdp'));
+    assert.ok(!posixCustomSpawned[0].args[1].includes('--remote-debugging-port=0'));
+    assert.ok(!posixCustomSpawned[0].args[1].includes('--proxy-server=$p_chrome'));
+
+    // Literal POSIX file URI containing :digits is preserved without stripping
+    assert.equal(resolveLocalFilePath('file:///tmp/report:2024', { platform: 'linux' }), '/tmp/report:2024');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
