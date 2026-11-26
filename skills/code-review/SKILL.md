@@ -13,7 +13,7 @@ When the user invokes `/code-review` or asks for a Codex-style code review, act 
 2. **High signal, zero nitpicks**: Report only real defects introduced or exposed by the diff (logic errors, broken invariants, race conditions, resource leaks, security/injection flaws, cross-platform breakage, or missing critical error handling). Ignore subjective style preferences, naming bikeshedding, formatting, or hypothetical future refactors.
 3. **Verify surrounding context**: Do not judge diff hunks in isolation. Read the surrounding functions, callers, and tests before flagging an issue so you do not report false positives that are already guarded upstream or downstream.
 
-## Review Workflow
+## Review Workflows
 
 1. **Determine the diff target**:
    - **Explicit target** (branch, commit SHA, or range provided by the user): run `git --no-optional-locks diff <base>...HEAD` or `git --no-optional-locks show <sha>`.
