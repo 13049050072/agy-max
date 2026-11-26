@@ -562,9 +562,14 @@ test('Effort Slider mounts star ticks, auto-yields to .ces-slider, renders Orche
   const slider = panel.querySelector('[data-testid="agy-effort-slider"]');
   assert.ok(slider, 'Effort slider should mount inside model-selector-panel');
   assert.equal(slider.querySelectorAll('.agy-effort-tick').length, 4);
+  assert.equal(slider.querySelector('[data-testid="agy-effort-tick-low"]').style.left, 'calc(12px + (100% - 24px) * 0.0000)');
 
   // Click XHigh star tick -> clicks native button & persists to localStorage
   const xhighTick = slider.querySelector('[data-testid="agy-effort-tick-xhigh"]');
+  assert.equal(xhighTick.style.left, 'calc(12px + (100% - 24px) * 1.0000)');
+  const wbStyle = document.querySelector('style[data-agy-workbench-style="1"]')?.textContent || '';
+  assert.ok(wbStyle.includes('.agy-effort-tick:first-child{transform:translateX(max(-50%,-16px))}'));
+  assert.ok(wbStyle.includes('.agy-effort-tick:last-child{transform:translateX(min(-50%,calc(16px - 100%)))}'));
   xhighTick.click();
   assert.equal(effortBtns.xhigh.clickedCount, 1);
   assert.equal(effortBtns.xhigh.getAttribute('aria-selected'), 'true');
