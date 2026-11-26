@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getAppDataDir, listRecentConversations, resolveConversationId, parseSessionData, exportTranscript } from '../../lib/session-parser.mjs';
 import { startNativeIntegration } from '../../lib/native-host.mjs';
@@ -8,12 +8,29 @@ import { installationPaths } from '../../lib/lifecycle.mjs';
 import { createSettingsStore } from '../../lib/settings.mjs';
 import { configureLaunchers, isRemoteSshEnvironment, manualLaunchCommand, maybePromptPostUpdateRelaunch, scheduleRelaunchWithDebugPort } from '../../lib/launcher.mjs';
 import { startSidecarWebUi } from '../../lib/sidecar-ui.mjs';
+import { DEFAULT_PROXY_BYPASS } from '../../lib/proxy.mjs';
 import { checkForUpdates } from '../../lib/updates.mjs';
 import { startUpdate, updateStatus } from '../../lib/update-manager.mjs';
 
 export { getAppDataDir, listRecentConversations, resolveConversationId, parseSessionData, exportTranscript };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+function isMain() {
+  if (typeof import.meta.main === 'boolean') return import.meta.main;
+  if (!process.argv[1]) return false;
+  const canonical = path => {
+    let absolute = resolve(path);
+    try { absolute = realpathSync.native(absolute); } catch {}
+    return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+  };
+  return canonical(fileURLToPath(import.meta.url)) === canonical(process.argv[1]);
+}
+
+if (isMain()) {
+  for (const key of ['NO_PROXY', 'no_proxy']) {
+    const entries = (process.env[key] || '').split(',').map(entry => entry.trim()).filter(Boolean);
+    const seen = new Set(entries.map(entry => entry.toLowerCase()));
+    process.env[key] = [...entries, ...DEFAULT_PROXY_BYPASS.split(',').filter(entry => !seen.has(entry))].join(',');
+  }
   const paths = installationPaths();
   const settings = createSettingsStore();
   const remoteSsh = isRemoteSshEnvironment();
@@ -52,6 +69,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       const health = await stop.health();
       return {
         healthy: health.healthy,
+        sidecarReady: true,
         compatibilityError: health.compatibilityError || '',
         clientVersion: health.clientVersion || '',
         connected: Boolean(health.connected),
@@ -68,7 +86,37 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     onCheckUpdate: () => checkForUpdates({ currentVersion: version }),
     onInstallUpdate: ({ version: expectedVersion } = {}) => startUpdate({ currentVersion: version, expectedVersion }),
     onUpdateStatus: () => updateStatus()
-  }).catch(() => async () => {});
-  const close = await serveRuntime({ directory: join(paths.data, 'runtime'), version, stop, health: stop.health });
-  for (const event of ['SIGINT', 'SIGTERM']) process.on(event, async () => { await stop(); await closeWebUi(); await close(); process.exit(0); });
+  }).catch(error => {
+    console.error('Sidecar Web UI startup failed:', error);
+    return async () => {};
+  });
+  let stopping;
+  function shutdown(options) {
+    stopping ??= Promise.resolve().then(async () => {
+      try { await stop(options); } finally { await closeWebUi(); }
+    });
+    return stopping;
+  }
+
+  let closeRuntime;
+  try {
+    closeRuntime = await serveRuntime({
+      directory: join(paths.data, 'runtime'),
+      version,
+      stop: shutdown,
+      health: async () => ({ ...await stop.health(), sidecarReady: true })
+    });
+  } catch (error) {
+    await shutdown();
+    throw error;
+  }
+
+  for (const event of ['SIGINT', 'SIGTERM']) {
+    process.on(event, () => {
+      void shutdown().finally(closeRuntime).then(() => process.exit(0), error => {
+        console.error('Sidecar shutdown failed:', error);
+        process.exit(1);
+      });
+    });
+  }
 }

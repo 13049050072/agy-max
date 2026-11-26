@@ -600,3 +600,54 @@ test('thought-translator source and test contain no middle-dot character (U+00B7
   assert.equal(src.includes('\u00b7'), false);
   assert.equal(tst.includes('\u00b7'), false);
 });
+
+test('fetchViaProxy sends HTTP request bytes through its SOCKS5 tunnel with zero direct connections', async () => {
+  let directConnections = 0;
+  const target = net.createServer(socket => { directConnections++; socket.destroy(); });
+  await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+  const targetPort = target.address().port;
+  let requestBytes = '';
+  let connectPacket;
+  const sockets = new Set();
+  const proxy = net.createServer(socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    let stage = 0;
+    let pending = Buffer.alloc(0);
+    socket.on('data', chunk => {
+      pending = Buffer.concat([pending, chunk]);
+      if (stage === 0 && pending.length >= 3) {
+        pending = pending.subarray(3);
+        stage = 1;
+        socket.write(Buffer.from([5, 0]));
+      } else if (stage === 1 && pending.length >= 5 && pending.length >= 7 + pending[4]) {
+        connectPacket = pending.subarray(0, 7 + pending[4]);
+        pending = pending.subarray(connectPacket.length);
+        stage = 2;
+        socket.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0]));
+      } else if (stage === 2) {
+        requestBytes = pending.toString('utf8');
+        if (requestBytes.endsWith('\r\n\r\nhello')) {
+          stage = 3;
+          socket.end('HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ntunneled');
+        }
+      }
+    });
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetchViaProxy(
+      'http://127.0.0.1:' + targetPort + '/translate?q=one',
+      { method: 'POST', headers: { 'Content-Length': '5' }, body: 'hello' },
+      'socks5://127.0.0.1:' + proxy.address().port, 2000
+    );
+    assert.equal(await response.text(), 'tunneled');
+    assert.match(requestBytes, /^POST \/translate\?q=one HTTP\/1\.1\r\n/);
+    assert.equal(connectPacket.subarray(5, -2).toString('ascii'), '127.0.0.1');
+    assert.equal(connectPacket.readUInt16BE(connectPacket.length - 2), targetPort);
+    assert.equal(directConnections, 0);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await Promise.all([proxy, target].map(server => new Promise(resolve => server.close(resolve))));
+  }
+});

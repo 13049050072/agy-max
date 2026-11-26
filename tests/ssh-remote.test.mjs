@@ -1,3 +1,4 @@
+import { parseOpenSshCommand } from '../lib/ssh-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -591,5 +592,20 @@ test('buildShellBootstrap prefers agy-node and selects highest node:zlib-capable
     assert.equal(res3.out.trim(), 'SELECTED:v99.14');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SSH tokenizer keeps Windows drive and UNC identity paths in CRLF pastes', () => {
+  for (const [arg, path] of [
+    ['"C:\\My Keys\\\u5bc6\u94a5\\id_ed25519"', 'C:\\My Keys\\\u5bc6\u94a5\\id_ed25519'],
+    ['C:\\keys\\id', 'C:\\keys\\id'],
+    ['"\\\\server\\share name\\\u5bc6\u94a5"', '\\\\server\\share name\\\u5bc6\u94a5'],
+    ['\\\\server\\share\\key', '\\\\server\\share\\key'],
+    ['/home/dev/My\\ Keys/id', '/home/dev/My Keys/id']
+  ]) {
+    const parsed = parseOpenSshCommand('ssh -i ' + arg + ' user@dev\r\nPassword: ignored');
+    assert.equal(parsed.valid, true, arg);
+    assert.equal(parsed.identityFile, path);
+    assert.equal(parsed.host, 'dev');
   }
 });
