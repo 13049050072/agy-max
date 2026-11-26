@@ -1167,3 +1167,93 @@ test('switchAccount aborts before restoreToActive when backing up current active
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('createAccountsStore passes per-account ToS state on switch, skips first-time accounts and tolerates bad app_storage.json (Issue #59)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-tos-59-'));
+  const appStoragePath = join(dir, 'app_storage.json');
+  try {
+    const vault = createFakeVault({ 'gemini:antigravity': 'tok-alpha' });
+    const relaunchCalls = [];
+    const store = createAccountsStore(dir, {
+      vault,
+      appStoragePath,
+      relaunch: options => { relaunchCalls.push(options || null); return { scheduled: true }; }
+    });
+
+    // Corrupt storage must not break syncActive or switch; no ToS state can be claimed.
+    writeFileSync(appStoragePath, '{not json');
+    const alpha = store.syncActive({ email: 'alpha@example.com', groups: [{ displayName: 'Gemini', buckets: [] }] });
+    assert.equal(alpha.accounts[0].onboardingAccepted, true); // legacy quota data implies prior acceptance
+    assert.equal(alpha.accounts[0].isGcpTos, null);
+    writeFileSync(appStoragePath, JSON.stringify({ 'agy.onboarding.lastLoginUsername': 'alpha@example.com', 'agy.onboarding.lastLoginIsGcpTos': 'false' }));
+    const alphaConfirmed = store.syncActive({ email: 'alpha@example.com' });
+    assert.equal(alphaConfirmed.accounts[0].isGcpTos, false);
+
+    // New beta account has no saved acceptance yet: adding it must NOT fake ToS state.
+    const prep = store.prepareAdd();
+    vault.slots.set('gemini:antigravity', 'tok-beta');
+    const added = store.completeAdd({ email: 'beta@example.com', prevEmail: 'alpha@example.com', prevCredHash: prep.prevCredHash });
+    assert.equal(added.accountChanged, true);
+    assert.equal(relaunchCalls.at(-1), null);
+    const beta = added.accounts.find(a => a.email === 'beta@example.com');
+    assert.equal(beta.onboardingAccepted, false);
+
+    // Beta accepts ToS (isGcpTos true) and its state is captured on the next sync.
+    writeFileSync(appStoragePath, JSON.stringify({ 'agy.onboarding.lastLoginUsername': 'beta@example.com', 'agy.onboarding.lastLoginIsGcpTos': true, unrelated: 'keep-me' }));
+    store.syncActive({ email: 'beta@example.com' });
+    store.switchAccount(alpha.accounts[0].id);
+    assert.deepEqual(relaunchCalls.at(-1), { onboardingSync: { email: 'alpha@example.com', isGcpTos: false } });
+
+    // Relaunch as alpha, then switch back to beta: beta's captured true flag is passed along.
+    writeFileSync(appStoragePath, JSON.stringify({ 'agy.onboarding.lastLoginUsername': 'alpha@example.com', 'agy.onboarding.lastLoginIsGcpTos': 'false' }));
+    store.syncActive({ email: 'alpha@example.com' });
+    store.switchAccount(beta.id);
+    assert.deepEqual(relaunchCalls.at(-1), { onboardingSync: { email: 'beta@example.com', isGcpTos: true } });
+
+    // Missing storage file keeps switching alive without any onboardingSync payload.
+    rmSync(appStoragePath, { force: true });
+    store.syncActive({ email: 'beta@example.com' });
+    store.switchAccount(alpha.accounts[0].id);
+    assert.deepEqual(relaunchCalls.at(-1), { onboardingSync: { email: 'alpha@example.com', isGcpTos: false } });
+    const freshStore = createAccountsStore(dir, { vault, appStoragePath: join(dir, 'missing.json'), relaunch: o => { relaunchCalls.push(o || null); return { scheduled: true }; } });
+    assert.doesNotThrow(() => freshStore.switchAccount(alpha.accounts[0].id), /ENOENT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AddAccountModal shows the pending https sign-in link, copies it, and cancels the login', async () => {
+  const state = []; let idx = 0; const effects = [];
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: 'fragment', useId: () => 'id',
+    useState: init => { const i = idx++; if (!(i in state)) state[i] = init; return [state[i], v => { state[i] = typeof v === 'function' ? v(state[i]) : v; }]; },
+    useEffect: fn => { effects.push(fn); }, useSyncExternalStore: (_, get) => get()
+  };
+  const copied = []; let url = 'https://accounts.google.com/o/oauth2/auth?x=1'; let cancelled = 0; let closed = 0; let listener = null;
+  const context = vm.createContext({
+    React, Intl, URL, window: { addEventListener() {}, removeEventListener() {} }, document: { createElement: () => ({ dataset: {}, remove() {} }), head: { append() {} } },
+    navigator: { clipboard: { writeText: async v => { copied.push(v); } } }, setInterval: () => 1, clearInterval() {}, setTimeout: () => 1,
+    Uy: 'button', dq: ({ name }) => ({ type: 'icon', props: { name }, children: [] }), UP: 'row', TP: 'card', VP: 'section', XP: 'switch', k0: 'disclosure', Sy: 'tooltip', HC: 'popover', IC: 'trigger', JC: 'content', kT: 'select', lT: 'st', mT: 'sm', nT: 'si'
+  });
+  vm.runInContext(readFileSync(new URL('../lib/native-panels.js', import.meta.url), 'utf8'), context);
+  const panels = context.__agyPanels({ version: '1', t: v => v, defaults: {}, options: () => ({ language: 'en' }), subscribe: () => () => {}, revision: () => 0,
+    loginUrl: () => url, onLoginUrlChange: cb => { listener = cb; return () => { listener = null; }; }, cancelAccountLogin: () => { cancelled++; } });
+  const render = busy => { idx = 0; effects.length = 0; const tree = panels.AddAccountModal({ open: true, busy, onSubmit() {}, onClose: () => { closed++; } }); return tree; };
+  const find = (node, id) => { if (!node || typeof node !== 'object') return null; if (Array.isArray(node)) { for (const n of node) { const r = find(n, id); if (r) return r; } return null; } if (node.props?.['data-testid'] === id) return node; if (typeof node.type === 'function') return find(node.type({ ...node.props, children: node.children }), id); return find(node.children, id); };
+  render(true);
+  for (const fn of effects) fn();
+  const tree = render(true);
+  assert.equal(find(tree, 'agy-add-account-oauth-url').children[0], url);
+  await find(tree, 'agy-add-account-copy-url').props.onClick();
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(copied, [url]);
+  // A non-https link from the session is never shown.
+  listener('');
+  assert.equal(find(render(true), 'agy-add-account-oauth-box'), null);
+  find(render(true), 'agy-add-account-cancel').props.onClick();
+  assert.equal(cancelled, 1);
+  assert.equal(closed, 1);
+  // Before sign-in starts, cancel just closes without cancelling a login.
+  find(render(false), 'agy-add-account-cancel').props.onClick();
+  assert.equal(cancelled, 1);
+});

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectPackage } from '../lib/package.mjs';
 import { installPlugin, uninstallPlugin, installationPaths, atomicJson } from '../lib/lifecycle.mjs';
@@ -65,6 +65,27 @@ test('installPlugin deploys bundled agy-fast by default, toggle disables/restore
   }
 });
 
+test('managed install disables agy-fast self-updater without touching unrelated cache settings', async () => {
+  const s = createSandbox();
+  try {
+    const cacheDir = join(s.paths.root, 'cache', 'agy-fast');
+    mkdirSync(cacheDir, { recursive: true });
+    const cacheConfig = join(cacheDir, 'config.json');
+    atomicJson(cacheConfig, { toolLoading: 'lazy', channel: 'main' });
+    const bundle = collectPackage(resolve('.'));
+    await installPlugin({ bundle, home: s.home, stop: async () => {} });
+    assert.deepEqual(JSON.parse(readFileSync(cacheConfig, 'utf8')), { toolLoading: 'lazy', channel: 'main', autoUpdate: 'off' });
+    await uninstallPlugin({ home: s.home, stop: async () => {} });
+    assert.equal(JSON.parse(readFileSync(cacheConfig, 'utf8')).autoUpdate, 'off');
+    // An unreadable cache config is left as is and does not block the install.
+    writeFileSync(cacheConfig, '{not json');
+    await installPlugin({ bundle, home: s.home, stop: async () => {} });
+    assert.equal(readFileSync(cacheConfig, 'utf8'), '{not json');
+  } finally {
+    s.clean();
+  }
+});
+
 test('pre-existing standalone agy-fast can be toggled off/on and is preserved when Antigravity Max is uninstalled', async () => {
   const s = createSandbox();
   try {
@@ -72,9 +93,14 @@ test('pre-existing standalone agy-fast can be toggled off/on and is preserved wh
     mkdirSync(fastDir, { recursive: true });
     writeFileSync(join(fastDir, 'plugin.json'), JSON.stringify({ name: 'agy-fast', version: '0.9.9' }));
     writeFileSync(join(fastDir, 'USER_CUSTOM.txt'), 'keep-me');
+    const cacheConfig = join(s.paths.root, 'cache', 'agy-fast', 'config.json');
+    mkdirSync(dirname(cacheConfig), { recursive: true });
+    atomicJson(cacheConfig, { autoUpdate: 'notify' });
     const bundle = collectPackage(resolve('.'));
     await installPlugin({ bundle, home: s.home, stop: async () => {} });
     assert.equal(existsSync(join(fastDir, MANAGED_MARKER)), false);
+    // The user's own agy-fast keeps its own update setting.
+    assert.equal(JSON.parse(readFileSync(cacheConfig, 'utf8')).autoUpdate, 'notify');
     assert.equal(readFileSync(join(fastDir, 'USER_CUSTOM.txt'), 'utf8'), 'keep-me');
 
     // User toggles agyFast OFF -> parked safely with previousEnabled recorded

@@ -285,3 +285,15 @@ test('native-i18n preserves dynamic title/placeholder updates and handles ja/yue
     freshCtx.__agyLocalization.dispose();
   }
 });
+
+test('localizer leaves code editors, diff viewers and terminals untranslated', () => {
+  const node = (value, matches = []) => ({ nodeValue: value, parentElement: { closest: sel => matches.some(m => sel.split(',').includes(m)) ? {} : null } });
+  const nodes = [node('Settings', ['.monaco-editor']), node('Settings', ['.monaco-diff-editor']), node('Settings', ['[data-testid*="diff"]']), node('Settings', ['.xterm']), node('Settings', ['.view-lines']), node('Settings')];
+  const document = { nodeType: 9, body: { nodeType: 1, getAttribute: () => null, closest: () => null, querySelectorAll: () => [] }, createTreeWalker: () => { let i = 0; return { nextNode: () => nodes[i++] || null }; }, querySelectorAll: () => [] };
+  const context = vm.createContext({ document, NodeFilter: { SHOW_TEXT: 4 }, MutationObserver: class { observe() {} disconnect() {} }, __agyToZhTw: toZhTw });
+  vm.runInContext(readFileSync('lib/native-i18n.js', 'utf8'), context);
+  const loc = context.__agyI18n.localizer();
+  loc.apply('zh-CN', true);
+  assert.deepEqual(nodes.map(n => n.nodeValue), ['Settings', 'Settings', 'Settings', 'Settings', 'Settings', '设置']);
+  loc.dispose();
+});

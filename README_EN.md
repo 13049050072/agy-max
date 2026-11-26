@@ -198,7 +198,7 @@ Every setting applies live in **Antigravity Max -> Settings** and saves automati
 - **Immediate post-compaction context projection and security/performance hardening**: Projected post-`/compact` token usage immediately, added incremental SQLite caching for >12 session DBs, and hardened loopback proxy bypass, IPC envelope isolation, Git symlink checks, and multi-account backup guards.
 
 ### v1.1.0
-- **Built-in `agy-fast` accelerator (on by default, toggleable anytime)**: Bundled [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) (`v0.3.0`) out of the box and added a `Built-in agy-fast accelerator` toggle under `Settings -> Conversation enhancements` to turn it off or back on anytime while preserving custom `*.local.md` rules and standalone installs.
+- **Built-in `agy-fast` accelerator (on by default, toggleable anytime)**: Bundled [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) (`v0.3.1`) out of the box and added a `Built-in agy-fast accelerator` toggle under `Settings -> Conversation enhancements` to turn it off or back on anytime while preserving custom `*.local.md` rules and standalone installs.
 - **Prominent open-source credits**: Added dedicated attribution tables and callouts across `README.md`, `README_EN.md`, [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt), and `Settings -> About` crediting [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools), [RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism), and [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast).
 
 ### v1.0.0

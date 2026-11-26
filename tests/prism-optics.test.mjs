@@ -971,6 +971,11 @@ test('motion choreography: streamInk CSS.highlights, convAura, smoothCaret, scro
   assert.ok(wpVideo);
   assert.equal(wpVideo.style.props.get('opacity'), '0.3');
   assert.equal(wpVideo.style.props.get('filter'), 'blur(12px)');
+  // Antigravity 2.34+ shell layers become see-through only while a wallpaper is mounted.
+  assert.equal(m.document.documentElement.getAttribute('data-agy-wallpaper'), '1');
+  const wpCss = m.document.querySelector('[data-agy-optics-style]')?.textContent || '';
+  assert.match(wpCss, /html\[data-agy-wallpaper\] \.agy-inset-shell\{background:transparent!important\}/);
+  assert.match(wpCss, /\[data-main-content-body\][^{]*\{background:color-mix\(in srgb,var\(--background\) 72%,transparent\)!important\}/);
 
   m.document.body.setAttribute('data-has-browser-hole', 'true');
   assert.equal(wpLayer.getAttribute('data-hidden-browser-hole'), 'true');
@@ -1165,6 +1170,7 @@ test('standalone mountPopoverVial, hidden peek deference, image wallpaper, and t
 
   assert.ok(m.document.querySelector('[data-testid="agy-wallpaper-layer"] img'));
   assert.equal(card.querySelector('[data-testid="agy-mascot-stage"]').getAttribute('data-peek'), 'false');
+  assert.equal(m.document.documentElement.getAttribute('data-agy-wallpaper'), '1');
 
   // Scroll glide capped at 60fps: 1st step runs, 4ms later is skipped, 16ms later advances
   scrollBtn.dispatchEvent({ type: 'click', target: scrollBtn });
@@ -1176,6 +1182,8 @@ test('standalone mountPopoverVial, hidden peek deference, image wallpaper, and t
   m.stepFrame(16);
   assert.ok(vp.scrollTop > afterFirst);
 
+  optics.sync({ enabled: true, wallpaperEnabled: false });
+  assert.equal(m.document.documentElement.getAttribute('data-agy-wallpaper'), null);
   optics.dispose();
 });
 

@@ -1552,3 +1552,84 @@ test('ComposerGoalBar renders floating pill with checklist progress and expands 
 
   p.context.__agyPowertools.dispose();
 });
+
+test('idle state polls with an identical reply do not re-render; a changed reply does', async () => {
+  const p = page(true);
+  let intervalCb = null;
+  p.context.setInterval = cb => { intervalCb = cb; return 1; };
+  p.context.location = { pathname: '/c/conv-1' };
+  p.context.__agyNativeAdapter.installPage = () => true;
+  let reply = { conversationId: 'conv-1', turns: [], requests: [], settings: { enabled: true } };
+  let env = null;
+  p.context.__agyPanels = e => { env = e; return { Page: () => null, Sidebar: () => null, dispose() {} }; };
+  p.context.__agyPowertoolsHost = raw => {
+    const req = JSON.parse(raw);
+    const out = req.method === 'state' ? JSON.parse(JSON.stringify(reply)) : req.method === 'settings.get' ? { enabled: true } : {};
+    queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, out));
+  };
+  p.context.__agyInitialSettings = { enabled: true };
+  vm.runInContext(source, p.context);
+  const tick = async () => { await intervalCb(); await new Promise(r => setImmediate(r)); };
+  await new Promise(r => setImmediate(r));
+  await tick();
+  const settled = env.revision();
+  await tick();
+  await tick();
+  assert.equal(env.revision(), settled);
+  reply = { ...reply, requests: [{ id: 'r1' }] };
+  await tick();
+  assert.ok(env.revision() > settled);
+  p.context.__agyPowertools.dispose();
+});
+
+test('right-clicking a chat image opens the image menu; icons and file links do not', async () => {
+  const p = page(true);
+  const rendered = [];
+  p.context.ReactDOM = { createRoot() { return { render(tree) { rendered.push(tree); }, unmount() {} }; } };
+  p.context.React = { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), useState: v => [v, () => {}], useLayoutEffect() {}, useEffect() {} };
+  p.context.__agyNativeAdapter = { wrap: tree => tree, installPage: () => true };
+  p.context.window = { addEventListener() {} };
+  for (const name of ['IC', 'JC', 'KC', 'GC', 'dq']) p.context[name] = name;
+  p.context.__agyInitialSettings = { enabled: true, fileContextMenu: true };
+  p.document.body.appendChild = node => { node.isConnected = true; };
+  p.context.__agyPowertoolsHost = raw => { const req = JSON.parse(raw); queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, req.method === 'settings.get' ? { enabled: true, fileContextMenu: true } : {})); };
+  vm.runInContext(source, p.context);
+  await new Promise(r => setImmediate(r));
+  const img = src => ({ currentSrc: src, getAttribute: () => src });
+  const target = (image, inStep = true, fileLink = false) => ({
+    closest: sel => sel.includes('file://') ? (fileLink ? { getAttribute: () => 'https://not-a-file' } : null) : sel.startsWith('[data-testid="user-input-step"]') ? (inStep ? {} : null) : sel === 'img' ? image : null
+  });
+  const fire = t => { let prevented = false; for (const fn of p.callbacks.get('contextmenu')) fn({ clientX: 10, clientY: 20, target: t, preventDefault() { prevented = true; }, stopPropagation() {} }); return prevented; };
+  assert.equal(fire(target(img('blob:https://x/1'))), true);
+  const menuTree = rendered.at(-1);
+  const menu = menuTree.type(menuTree.props).children[1];
+  assert.equal(menu.props['data-testid'], 'agy-image-context-menu');
+  assert.deepEqual(menu.children.map(c => c.children[0].props['data-testid']), ['agy-image-attach-chat', 'agy-image-copy', 'agy-image-save']);
+  const before = rendered.length;
+  assert.equal(fire(target(img('https://x/symbols-icons/close.svg'))), false);
+  assert.equal(fire(target(img('blob:https://x/2'), false)), false);
+  assert.equal(fire(target(img('blob:https://x/3'), true, true)), false);
+  assert.equal(rendered.length, before);
+  p.context.__agyPowertools.dispose();
+});
+
+test('response toolbar Copy writes only the final answer and dispose restores clipboard.writeText', async () => {
+  const p = page(true);
+  const written = [];
+  const clipboard = { writeText: async text => { written.push(text); } };
+  const nativeWrite = clipboard.writeText;
+  p.context.navigator = { clipboard };
+  p.context.__agyNativeAdapter = { wrap() {}, installPage: () => true, finalResponseText: () => 'final answer' };
+  p.context.__agyInitialSettings = { enabled: true };
+  p.context.__agyPowertoolsHost = raw => { const req = JSON.parse(raw); queueMicrotask(() => p.context.__agyPowertoolsReceive(req.id, req.method === 'settings.get' ? { enabled: true } : {})); };
+  vm.runInContext(source, p.context);
+  await new Promise(r => setImmediate(r));
+  const click = inToolbar => { for (const fn of p.callbacks.get('click')) fn({ target: { closest: sel => inToolbar && sel.includes('cascade-system-message-toolbar') ? {} : null } }); };
+  click(true);
+  await clipboard.writeText('progress note\n\nfinal answer');
+  click(false);
+  await clipboard.writeText('user copied this');
+  assert.deepEqual(written, ['final answer', 'user copied this']);
+  p.context.__agyPowertools.dispose();
+  assert.equal(clipboard.writeText, nativeWrite);
+});

@@ -1089,3 +1089,68 @@ test('macOS bundle discovery skips nested Antigravity Helper.app and Antigravity
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('relaunch scripts sync ToS keys after Antigravity exits, preserving other app_storage.json keys (Issue #59)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-tos-launch-'));
+  try {
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    const exe = join(root, 'antigravity');
+    writeFileSync(exe, '');
+    const storage = join(root, 'app_storage.json');
+    writeFileSync(storage, JSON.stringify({ 'agy.onboarding.lastLoginUsername': 'old@example.com', otherKey: 'keep-me' }));
+    const spawned = [];
+    scheduleRelaunchWithDebugPort({
+      dataDir,
+      home: root,
+      platform: 'linux',
+      env: { APPIMAGE: exe },
+      onboardingSync: { email: 'new@example.com', isGcpTos: true },
+      appStoragePath: storage,
+      execPath: process.execPath,
+      spawnProcess(cmd, args, opts) { spawned.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    const [shellArg, script] = spawned[0].args;
+    assert.equal(shellArg, '-c');
+    assert.equal(spawned[0].opts.env.AGY_ONBOARDING_EMAIL, 'new@example.com');
+    assert.equal(spawned[0].opts.env.AGY_ONBOARDING_GCP_TOS, 'true');
+    assert.equal(spawned[0].opts.env.AGY_ONBOARDING_STORAGE, storage);
+    assert.ok(script.includes('agy.onboarding.lastLoginUsername'));
+    assert.ok(script.includes('agy.onboarding.lastLoginIsGcpTos'));
+    const syncIdx = script.indexOf("d['agy.onboarding.lastLoginUsername']");
+    const launchIdx = script.indexOf('nohup "$target"');
+    assert.ok(syncIdx > 0 && syncIdx < launchIdx, 'sync must happen after exit and before launch');
+    if (process.platform !== 'win32') {
+      const check = spawnSync('sh', ['-n', '-c', script], { encoding: 'utf8' });
+      assert.equal(check.status, 0, check.stderr);
+    }
+    // Execute only the injected node -e sync to verify atomic write and key preservation.
+    const nodeCmd = script.match(/ELECTRON_RUN_AS_NODE=1 "\$AGY_NODE_BIN" -e "([^"]+)"/)[1];
+    const sync = spawnSync(process.execPath, ['-e', nodeCmd], { encoding: 'utf8', env: spawned[0].opts.env });
+    assert.equal(sync.status, 0, sync.stderr);
+    const after = JSON.parse(readFileSync(storage, 'utf8'));
+    assert.equal(after['agy.onboarding.lastLoginUsername'], 'new@example.com');
+    assert.equal(after['agy.onboarding.lastLoginIsGcpTos'], 'true');
+    assert.equal(after.otherKey, 'keep-me');
+
+    // Missing or corrupt storage is skipped, not fatal; invalid email payload is ignored entirely.
+    rmSync(storage);
+    const noFile = spawnSync(process.execPath, ['-e', nodeCmd], { encoding: 'utf8', env: spawned[0].opts.env });
+    assert.equal(noFile.status, 0, noFile.stderr);
+    writeFileSync(storage, '{bad json');
+    const badFile = spawnSync(process.execPath, ['-e', nodeCmd], { encoding: 'utf8', env: spawned[0].opts.env });
+    assert.equal(badFile.status, 0, badFile.stderr);
+    const spawnedBad = [];
+    const winExe = join(root, 'AppData', 'Local', 'Programs', 'antigravity', 'Antigravity.exe');
+    mkdirSync(join(root, 'AppData', 'Local', 'Programs', 'antigravity'), { recursive: true });
+    writeFileSync(winExe, '');
+    scheduleRelaunchWithDebugPort({
+      dataDir, home: root, platform: 'win32', env: { LOCALAPPDATA: join(root, 'AppData', 'Local'), ANTIGRAVITY_AGENTAPI_EXE: '' },
+      onboardingSync: { email: 'bad email', isGcpTos: true }, appStoragePath: storage,
+      spawnProcess(cmd, args, opts) { spawnedBad.push({ cmd, args, opts }); return { unref() {} }; }
+    });
+    assert.equal(spawnedBad[0].opts.env.AGY_ONBOARDING_EMAIL, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

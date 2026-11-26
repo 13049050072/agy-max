@@ -1193,3 +1193,103 @@ test('resumeGoalInvocation dispatches continuation via matching ChatContext.send
   assert.equal(sent[0][1].items[0].chunk.value, '继续推进当前目标');
   assert.equal(await context.__agyNativeAdapter.resumeGoalInvocation('../bad', 'x'), false);
 });
+
+test('inline edit submits directly on the configured send key when the composer kept a pre-hook send closure', async () => {
+  const run = async ({ shortcut, keys, click = false }) => {
+    const events = [];
+    const listeners = [];
+    const editor = { getEditorState: () => ({ toJSON: () => ({ root: { type: 'root', children: [{ type: 'paragraph', children: [{ text: 'edited text' }] }] } }) }), setEditorState() {}, focus() {} };
+    const box = { lexicalRef: { current: editor }, getMediaAttachments: () => [], setMediaAttachments() {}, floatingContentRef: { current: {} } };
+    const inputBox = { parentNode: null, nextSibling: null };
+    const bottomDock = { isConnected: true, children: [inputBox], insertBefore(node) { node.parentNode = this; node.parentElement = this; } };
+    inputBox.parentNode = bottomDock; inputBox.parentElement = bottomDock;
+    const service = { forkConversation() {}, async cancelCascadeInvocation() {}, async sendUserCascadeMessage() { events.push(['rpcSend']); } };
+    const chatCtx = {
+      stepHandler: { async revertToIndex(id, idx, opts) { events.push(['revert', id, idx, opts]); } },
+      async sendMessage(payload) { events.push(['ctxSend', payload]); }
+    };
+    const message = { cascadeId: 'conv-cold', metadata: { index: 4 }, step: { items: [{ chunk: { case: 'text', value: 'old' } }, { chunk: { case: 'item', value: 'mention' } }], media: [] } };
+    const element = {
+      isConnected: true, setAttribute() {}, removeAttribute() {}, prepend() {},
+      closest: () => ({ querySelector: () => inputBox }),
+      '__reactFiber$fixture': { tag: 0, memoizedProps: message, return: { tag: 10, type: {}, memoizedProps: { value: chatCtx },
+        return: { tag: 10, type: {}, memoizedProps: { value: { inputBoxRef: { current: box }, getLexicalEditor: () => editor } },
+          return: { tag: 10, type: {}, memoizedProps: { value: service }, return: null } } } }
+    };
+    const makeNode = () => ({ dataset: {}, className: '', textContent: '', append(child) { if (child) { child.parentNode = this; child.parentElement = this; } }, addEventListener(type, fn, capture) { listeners.push({ type, fn, capture: Boolean(capture) }); }, remove() {} });
+    const context = vm.createContext({
+      document: { querySelector: sel => /listbox|menu/.test(sel) ? null : element, createElement: makeNode },
+      nativeStorage: { getItems: async () => (shortcut ? { sendMessageShortcut: shortcut } : {}) },
+      HU: m => m.index, LN: items => JSON.stringify({ root: { items } }), IJ: (_, json) => JSON.parse(json),
+      I: { CascadeConfigSchema: {} }, tc: (_, v) => structuredClone(v), Wb: (_, v) => v
+    });
+    vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+    const adapter = context.__agyNativeAdapter;
+    await adapter.beginEdit(element);
+    await new Promise(r => setImmediate(r));
+    const fire = (type, event) => { for (const l of listeners) if (l.type === type && l.capture) l.fn(event); return event; };
+    const inEditor = { closest: sel => sel.includes('contenteditable') ? {} : null };
+    const results = keys.map(over => fire('keydown', { key: 'Enter', keyCode: 13, target: inEditor, prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() {}, stopImmediatePropagation() {}, ...over }).prevented);
+    if (click) results.push(fire('click', { target: { closest: sel => sel.includes('send-button') ? { disabled: false } : null }, prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() {}, stopImmediatePropagation() {} }).prevented);
+    await new Promise(r => setImmediate(r));
+    return { events: JSON.parse(JSON.stringify(events)), results, adapter, inputBox, bottomDock };
+  };
+
+  // Default "Enter" setting: Shift+Enter stays a newline, Enter reverts then resends through the chat context.
+  const enter = await run({ keys: [{ shiftKey: true }, {}] });
+  assert.deepEqual(enter.results, [false, true]);
+  assert.equal(enter.adapter.pendingEdit, null);
+  assert.equal(enter.inputBox.parentNode, enter.bottomDock);
+  assert.deepEqual(enter.events.map(e => e[0]), ['revert', 'ctxSend']);
+  assert.deepEqual(enter.events[0], ['revert', 'conv-cold', 3, { conversationOnly: true }]);
+  const sent = enter.events[1][1];
+  assert.equal(sent.resend, 'edit');
+  assert.deepEqual(sent.items, [{ chunk: { case: 'text', value: 'edited text' } }, { chunk: { case: 'item', value: 'mention' } }]);
+
+  // "Cmd/Ctrl+Enter" setting: plain Enter is a newline and is left to the editor; Cmd+Enter submits.
+  const mod = await run({ shortcut: 'modEnter', keys: [{}, { metaKey: true }] });
+  assert.deepEqual(mod.results, [false, true]);
+  assert.deepEqual(mod.events.map(e => e[0]), ['revert', 'ctxSend']);
+
+  // Clicking the inline send button also takes the direct path.
+  const click = await run({ keys: [], click: true });
+  assert.deepEqual(click.results, [true]);
+  assert.deepEqual(click.events.map(e => e[0]), ['revert', 'ctxSend']);
+});
+
+test('finalResponseText keeps only the answer after the last tool call', () => {
+  const context = vm.createContext({ document: { querySelector: () => null }, I: { CascadeConfigSchema: {} }, tc: (_, v) => v, Wb: (_, v) => v });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const at = steps => ({ '__reactFiber$x': { memoizedProps: {}, return: { memoizedProps: { steps }, return: null } } });
+  const planner = (response, toolCalls = []) => ({ step: { case: 'plannerResponse', value: { response, toolCalls } } });
+  const { finalResponseText } = context.__agyNativeAdapter;
+  assert.equal(finalResponseText(at([
+    { step: { case: 'userInput', value: {} } },
+    planner('Let me look.', [{ id: 't1' }]),
+    { step: { case: 'runCommand', value: {} } },
+    planner('Found it, checking once more.', [{ id: 't2' }]),
+    planner('Here is the fix.'),
+    { step: { case: 'notifyUser', value: { message: 'Done.' } } }
+  ])), 'Here is the fix.\n\nDone.');
+  // A reply that ends on a tool call falls back to the last thing said.
+  assert.equal(finalResponseText(at([planner('Only text', [{ id: 't' }])])), 'Only text');
+  assert.equal(finalResponseText({}), '');
+});
+
+test('loginUrl only surfaces an https sign-in link and cancelAccountLogin calls the native cancel', async () => {
+  let snap = { active: true, authUrl: ' https://accounts.google.com/o/oauth2/auth?x=1 ', mode: 'redirect' }; let cancels = 0;
+  const auth = { getLoginSessionSnapshot: () => snap, onDidChangeLoginSession: cb => { auth.cb = cb; return { dispose() { auth.cb = null; } }; }, async cancelLogin() { cancels++; } };
+  const root = { '__reactFiber$x': { tag: 10, type: {}, memoizedProps: { value: { core: { authService: auth } } }, return: null } };
+  const context = vm.createContext({ document: { querySelector: sel => sel === '#root' ? { firstElementChild: root } : null }, I: { CascadeConfigSchema: {} }, tc: (_, v) => v, Wb: (_, v) => v });
+  vm.runInContext(readFileSync(new URL('../lib/native-client.js', import.meta.url), 'utf8'), context);
+  const a = context.__agyNativeAdapter;
+  assert.equal(a.loginUrl(), 'https://accounts.google.com/o/oauth2/auth?x=1');
+  snap = { authUrl: 'javascript:alert(1)' };
+  assert.equal(a.loginUrl(), '');
+  const seen = []; const off = a.onLoginUrlChange(u => seen.push(u));
+  auth.cb({ authUrl: 'http://insecure.example' }); auth.cb({ authUrl: 'https://ok.example/a' });
+  assert.deepEqual(seen, ['', 'https://ok.example/a']);
+  off(); assert.equal(auth.cb, null);
+  assert.equal(await a.cancelAccountLogin(), true);
+  assert.equal(cancels, 1);
+});

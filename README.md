@@ -198,7 +198,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 - **上下文压缩即时投影与全链路安全性能加固**：`/compact` 压缩后立即投影最新上下文占用与明细；超 12 个会话数据库时启用增量 SQLite 缓存加速看板；全面加固回环地址免代理直连、IPC 信封隔离、Git 符号链接边界与多账号防误切保护。
 
 ### v1.1.0
-- **默认内置 `agy-fast` 加速引擎**：随安装包内置 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（`v0.3.0`），安装后默认自动部署启用，并在「设置 -> 会话增强」新增 **内置 agy-fast 加速引擎** 开关，支持随时一键停用或恢复（自动保留自定义 `*.local.md` 规则并兼容用户独立安装目录）。
+- **默认内置 `agy-fast` 加速引擎**：随安装包内置 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（`v0.3.1`），安装后默认自动部署启用，并在「设置 -> 会话增强」新增 **内置 agy-fast 加速引擎** 开关，支持随时一键停用或恢复（自动保留自定义 `*.local.md` 规则并兼容用户独立安装目录）。
 - **完善开源来源与致谢公示**：在双语 README 顶部导览、独立致谢章节、第三方声明 [lib/vendor/NOTICE.txt](lib/vendor/NOTICE.txt) 与应用内「设置 -> 关于」页面清晰列出对 [WhiteBr1ck/agy-powertools](https://github.com/WhiteBr1ck/agy-powertools)、[RMvdesi/obsidian-prism](https://github.com/RMvdesi/obsidian-prism) 与 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) 的借鉴与集成说明。
 
 ### v1.0.0
