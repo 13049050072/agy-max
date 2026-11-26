@@ -22,7 +22,7 @@ import { createWorkspaceExplorer } from '../lib/workspace-explorer.mjs';
 import { createOmniGateway, resolveSafeDiffPath, resolveSafePreviewPath } from '../lib/omni-gateway.mjs';
 
 function makeTempDir(prefix = 'agy-omni-test-') {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return (realpathSync.native || realpathSync)(mkdtempSync(join(tmpdir(), prefix)));
 }
 
 function rawHttpRequest(urlStr, { method = 'GET', headers = {} } = {}) {
